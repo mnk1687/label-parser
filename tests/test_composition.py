@@ -31,3 +31,31 @@ class CompositionTest(unittest.TestCase):
         sorted_=sorted_rows(rows)
         self.assertEqual([r.txt2 for r in sorted_],['FBL015-161-02-LT BLUE-25','FBL015-161-02-LT BLUE-31','FBL015-161-02-MD BLUE-25','FBL015-162-03-BLACK-26'])
         self.assertEqual(safe_name('A/B:C'),'A_B_C')
+
+class SummaryTest(unittest.TestCase):
+    def test_sorted_vector_pages_and_no_overwrite(self):
+        from label_parser.composition import export_summary
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);entries=[];before={};pixels={}
+            for index,(color,size) in enumerate([('LT BLUE','40'),('DK BLUE','40'),('DK BLUE','28'),('LT BLUE','28')]):
+                row=ProductionRow('',size,'FBM015-099-03',f'FBM015-099-03-{color}-{size}',str(index),1)
+                path=root/f'{index}.pdf'
+                with fitz.open() as doc:
+                    page=doc.new_page(width=612,height=792);page.insert_text((40,40),row.txt2)
+                    page.draw_rect(fitz.Rect(40,60,100+index,120),color=(0,1,1))
+                    doc.save(path)
+                    pixels[row.txt2]=page.get_pixmap().samples
+                entries.append((row,path));before[path]=path.read_bytes()
+            output=export_summary(entries,root/'summary.pdf')
+            with fitz.open(output) as doc:
+                self.assertEqual(len(doc),4)
+                expected=sorted_rows([r for r,_ in entries])
+                self.assertEqual([t[1] for t in doc.get_toc()],[r.txt2 for r in expected])
+                for page,row in zip(doc,expected):
+                    self.assertEqual(page.get_pixmap().samples,pixels[row.txt2])
+                    self.assertTrue(page.get_drawings());self.assertFalse(page.get_images())
+            for path,data in before.items():self.assertEqual(path.read_bytes(),data)
+            with self.assertRaises(FileExistsError):export_summary(entries,output)
+            # Selecting a subset produces only those pages, not all sibling PDFs.
+            with fitz.open(export_summary(entries[:1],root/'selected.pdf')) as doc:self.assertEqual(len(doc),1)
+            with self.assertRaises(ValueError):export_summary([],root/'empty.pdf')

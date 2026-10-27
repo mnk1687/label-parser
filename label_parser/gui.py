@@ -198,7 +198,7 @@ class App:
         def worker():
             try:
                 excel,paths=export_compositions(job,folder,codes,self.message)
-                self.events.put(('saved',(folder,len(paths))))
+                self.events.put(('saved',(folder,len(paths),len({p.parent for p in paths}))))
             except Exception as e:self.events.put(('error',str(e)))
         threading.Thread(target=worker,daemon=True).start()
 
@@ -222,7 +222,7 @@ class App:
                         names=[f'{j.name} · {j.key[:4]}' for j in self.jobs];self.batch_choice.configure(values=names);self.batch_choice.set(names[0]);self.change_job()
                     self.busy(False);self.status.set('；'.join(issues) if issues else '识别完成。先核对排序明细，再勾选需要导出的组合。')
                 elif event=='saved':
-                    self.last_folder,n=data;self.busy(False);self.status.set(f'已生成排序 Excel 和 {n} 份组合 PDF，按 TXT1 分文件夹保存。');self.open_path(self.last_folder)
+                    self.last_folder,n,k=data;self.busy(False);self.status.set(f'已生成排序 Excel、{n} 份单页组合和 {k} 份款号汇总 PDF，按尺码升序排列。');self.open_path(self.last_folder)
                 elif event=='excel':self.last_folder=data.parent;self.busy(False);self.status.set('排序 Excel 已保存：'+data.name);self.open_path(data)
         except queue.Empty:pass
         self.root.after(100,self.poll)

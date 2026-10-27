@@ -118,6 +118,28 @@ def safe_name(value):
     return name
 
 
+def export_summary(entries, output):
+    """Merge explicit (ProductionRow, PDF path) pairs in color/size order."""
+    entries=list(entries);output=Path(output)
+    if not entries:raise ValueError('没有可汇总的组合')
+    if len({r.txt1 for r,_ in entries})!=1:raise ValueError('汇总文件只能包含同一个 TXT1')
+    if output.exists():raise FileExistsError(f'文件已存在：{output}')
+    ordered=sorted_rows([r for r,_ in entries])
+    paths={id(r):Path(p) for r,p in entries}
+    with fitz.open() as merged:
+        toc=[]
+        for row in ordered:
+            with fitz.open(paths[id(row)]) as source:
+                if len(source)!=1:raise ValueError(f'{row.txt2} 必须是单页组合 PDF')
+                merged.insert_pdf(source)
+            toc.append([1,row.txt2,len(merged)])
+        merged.set_toc(toc)
+        merged.set_metadata({'title':ordered[0].txt1+'汇总PDF','creator':'LabelDesk — original PDF page merge'})
+        output.parent.mkdir(parents=True,exist_ok=True)
+        merged.save(output,garbage=4,deflate=True)
+    return output
+
+
 def export_compositions(job,folder,barcodes,progress=print):
     folder=Path(folder)
     if folder.exists() and any(folder.iterdir()):raise FileExistsError('输出文件夹不是空目录，请选择新的目录')
@@ -132,6 +154,11 @@ def export_compositions(job,folder,barcodes,progress=print):
     if errors:raise ValueError('已保留 Excel，但未导出不完整组合：\n'+'\n'.join(errors[:10]))
     targets=[folder/safe_name(i.row.txt1)/(safe_name(i.row.txt2)+'.pdf') for i in items]
     if len(set(targets))!=len(targets):raise ValueError('TXT2 文件名重复，未生成 PDF，请核对 Excel')
+    groups=defaultdict(list)
+    for item,target in zip(items,targets):groups[item.row.txt1].append((item.row,target))
+    summaries={model:folder/safe_name(model)/(safe_name(model)+'汇总PDF.pdf') for model in groups}
+    all_paths=targets+list(summaries.values())
+    if len(set(all_paths))!=len(all_paths):raise ValueError('汇总文件名与组合文件名冲突')
     docs={}
     try:
         for index,(item,target) in enumerate(zip(items,targets)):
@@ -140,4 +167,7 @@ def export_compositions(job,folder,barcodes,progress=print):
             progress(f'导出组合 {index+1}/{len(items)} · {item.row.txt2}')
     finally:
         for d in docs.values():d.close()
+    for model,entries in groups.items():
+        export_summary(entries,summaries[model])
+        progress(f'已生成 {model}汇总PDF · {len(entries)} 页')
     return excel,targets
