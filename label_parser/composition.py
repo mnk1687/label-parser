@@ -1,9 +1,9 @@
 """Excel-driven per-Barcode compositions; preserve original PDF graphics."""
-from dataclasses import dataclass,asdict
+from dataclasses import dataclass
 from pathlib import Path
 from collections import defaultdict
 import fitz
-import re,json,subprocess,tempfile,shutil,zipfile
+import re,zipfile
 import xml.etree.ElementTree as ET
 from .prodsheet import ProductionRow
 from .workflow import role
@@ -69,21 +69,39 @@ def compose(item,documents=None):
             for d in documents.values():d.close()
 
 
-def write_excel(rows,source,output,preview=None):
-    bundle=Path.home()/'.cache/codex-runtimes/codex-primary-runtime/dependencies'
-    node=bundle/'node/bin/node';modules=bundle/'node/node_modules'
-    if not node.exists() or not (modules/'@oai/artifact-tool').exists():raise RuntimeError('Excel 导出需要本机 Codex 的 artifact-tool 运行时')
+def write_excel(rows,source,output):
+    """Write a portable workbook with bundled Python dependencies only."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
     output=Path(output).resolve()
     if output.exists():raise FileExistsError(f'文件已存在：{output}')
     output.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='label-excel-') as folder:
-        folder=Path(folder);(folder/'node_modules').symlink_to(modules,target_is_directory=True)
-        shutil.copyfile(Path(__file__).with_name('workbook.mjs'),folder/'workbook.mjs')
-        payload=folder/'input.json';payload.write_text(json.dumps({'source':Path(source).name,'rows':[asdict(r) for r in sorted_rows(rows)]},ensure_ascii=False))
-        args=[str(node),str(folder/'workbook.mjs'),str(payload),str(output)]
-        if preview:args.append(str(Path(preview).resolve()))
-        completed=subprocess.run(args,capture_output=True,text=True,timeout=180)
-        if completed.returncode:raise RuntimeError('Excel 生成失败：'+completed.stderr[-1800:])
+    wb=Workbook();sheet=wb.active;sheet.title='生产明细'
+    sheet.append(['Article','Size','TXT1','TXT2','Barcode','Quantity'])
+    last=''
+    for r in sorted_rows(rows):
+        group=r.txt1+'|'+r.txt2.rsplit('-',1)[0]
+        if last and group!=last:sheet.append([None]*6)
+        # Explicit text type also prevents source cells being interpreted as formulas.
+        sheet.append([r.article,str(r.size),r.txt1,r.txt2,str(r.barcode),r.quantity])
+        for cell in list(sheet[sheet.max_row])[:5]:cell.data_type='s'
+        last=group
+    thin=Side(style='thin',color='DEE4EB')
+    for row in sheet.iter_rows(min_col=1,max_col=6):
+        sheet.row_dimensions[row[0].row].height=21
+        for cell in row:
+            cell.font=Font(name='Arial',size=11)
+            cell.border=Border(left=thin,right=thin,top=thin,bottom=thin)
+            cell.alignment=Alignment(vertical='center')
+        row[1].number_format='@';row[4].number_format='@';row[5].number_format='0'
+    for cell in sheet[1][:6]:
+        cell.fill=PatternFill('solid',fgColor='416FBE');cell.font=Font(name='Arial',size=11,bold=True,color='FFFFFF')
+    sheet.row_dimensions[1].height=27
+    for col,width in [('A',20),('B',9),('C',24),('D',48),('E',24),('F',13)]:sheet.column_dimensions[col].width=width
+    sheet['H1']='来源：'+Path(source).name;sheet['H1'].data_type='s'
+    sheet['H1'].font=Font(name='Arial',size=10,color='64748B');sheet.column_dimensions['H'].width=65
+    sheet.freeze_panes='D2';sheet.sheet_view.showGridLines=False
+    wb.save(output);wb.close()
     return output
 
 

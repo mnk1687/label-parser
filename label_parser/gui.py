@@ -9,6 +9,8 @@ from PIL import Image,ImageTk
 from .workflow import discover,recognize,role,explain
 from .composition import sorted_rows,make_compositions,compose,write_excel,export_compositions
 
+FONT_FAMILY='Microsoft YaHei UI' if sys.platform=='win32' else 'PingFang SC'
+
 BG='#F5F7FB';WHITE='#FFFFFF';INK='#17233B';MUTED='#738096';BLUE='#4269E1';LINE='#E7ECF3'
 ctk.set_appearance_mode('light')
 
@@ -18,7 +20,7 @@ class App:
         self.selected={};self.items=[];self.visible=[];self.preview_cache={};self.photo=None;self.last_folder=None
         root.title('LabelDesk · 生产标签');root.geometry('1450x920');root.minsize(1180,760);root.configure(fg_color=BG)
         root.grid_rowconfigure(0,weight=1);root.grid_columnconfigure(1,weight=1)
-        self.font=ctk.CTkFont(family='PingFang SC',size=13)
+        self.font=ctk.CTkFont(family=FONT_FAMILY,size=13)
         side=ctk.CTkFrame(root,width=210,corner_radius=0,fg_color=WHITE);side.grid(row=0,column=0,sticky='nsew');side.grid_propagate(False)
         ctk.CTkLabel(side,text='LabelDesk',text_color=INK,font=ctk.CTkFont(size=27,weight='bold')).pack(anchor='w',padx=24,pady=(30,0))
         ctk.CTkLabel(side,text='生产标签工作台',text_color=MUTED,font=self.font).pack(anchor='w',padx=24,pady=(2,28))
@@ -47,7 +49,7 @@ class App:
         tablecard=ctk.CTkFrame(body,fg_color=WHITE,corner_radius=14);tablecard.grid(row=0,column=0,sticky='nsew',padx=(0,14));tablecard.grid_columnconfigure(0,weight=1);tablecard.grid_rowconfigure(1,weight=1)
         ctk.CTkLabel(tablecard,text='生产明细   /   按 TXT1 · 颜色 · 尺码排序',text_color=INK,font=ctk.CTkFont(size=14,weight='bold'),anchor='w').grid(row=0,column=0,sticky='ew',padx=16,pady=14)
         holder=ctk.CTkFrame(tablecard,fg_color=WHITE,corner_radius=0);holder.grid(row=1,column=0,sticky='nsew',padx=12,pady=(0,12));holder.grid_columnconfigure(0,weight=1);holder.grid_rowconfigure(0,weight=1)
-        style=ttk.Style();style.theme_use('clam');style.configure('Modern.Treeview',font=('PingFang SC',11),rowheight=36,background=WHITE,fieldbackground=WHITE,foreground=INK,borderwidth=0,relief='flat');style.configure('Modern.Treeview.Heading',font=('PingFang SC',10,'bold'),background='#F5F7FB',foreground=MUTED,borderwidth=0,padding=8,relief='flat');style.map('Modern.Treeview',background=[('selected','#EDF2FF')],foreground=[('selected',INK)])
+        style=ttk.Style();style.theme_use('clam');style.configure('Modern.Treeview',font=(FONT_FAMILY,11),rowheight=36,background=WHITE,fieldbackground=WHITE,foreground=INK,borderwidth=0,relief='flat');style.configure('Modern.Treeview.Heading',font=(FONT_FAMILY,10,'bold'),background='#F5F7FB',foreground=MUTED,borderwidth=0,padding=8,relief='flat');style.map('Modern.Treeview',background=[('selected','#EDF2FF')],foreground=[('selected',INK)])
         self.table=ttk.Treeview(holder,style='Modern.Treeview',columns=['pick','size','txt1','txt2','barcode','quantity','status'],show='headings',selectmode='browse')
         for col,text,width in [('pick','选择',45),('size','Size',50),('txt1','TXT1',135),('txt2','TXT2 / 文件名',210),('barcode','Barcode',140),('quantity','数量',55),('status','组合',70)]:self.table.heading(col,text=text);self.table.column(col,width=width,minwidth=40,stretch=False)
         self.table.tag_configure('alternate',background='#FAFBFD');self.table.tag_configure('missing',foreground='#C17D2D')

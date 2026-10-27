@@ -1,4 +1,4 @@
-# LabelDesk v0.4.1 · 生产标签组合
+# LabelDesk v0.5.0 · 生产标签组合
 
 新版流程：**整批 PDF → ProdSheet 排序明细 Excel → TXT1 文件夹 → 以 TXT2 命名的单条 Barcode 组合 PDF**。
 
@@ -64,7 +64,7 @@ ALT-SS27-016_时间戳/
 
 Excel 是本次导出的中间明细：程序会先写出，再重新读取，依据其中 TXT1 建目录、TXT2 命名。当前 UI 尚不提供导入人工修改后的 Excel 功能。
 
-Excel 写入使用本机 Codex 的 artifact-tool Node 运行时。当前机器已验证可用；把软件移到没有此运行时的电脑时需要安装相应运行环境。
+Excel 写入由内置的 openpyxl 完成，不依赖 Node 或外部 Excel 运行时。
 
 ## 验证结果
 
@@ -77,7 +77,7 @@ Excel 写入使用本机 Codex 的 artifact-tool Node 运行时。当前机器�
 
 ## 运行
 
-需要 Python 3.10+、Tkinter、CustomTkinter、PyMuPDF、OCR 所需 Tesseract，以及本机 Codex 的 Excel 运行时。当前工作区环境已准备好。移动项目后可按以下方式安装 Python 依赖：
+需要 Python 3.10+、Tkinter、CustomTkinter、PyMuPDF 和 OCR 所需的 Tesseract。开发环境可按以下方式安装依赖：
 
 ```bash
 python3 -m venv .venv
@@ -89,3 +89,34 @@ python3 -m venv .venv
 ```
 
 同一个文件夹只应包含一份 ProdSheet 和本批次标签文件，多批次放在各自子文件夹中。识别缓存依旧可用，源内容和规则变化后自动失效。当前适配此 ProdSheet 表格与青色边框标签，其他版式需进一步适配。
+
+## 构建 Windows 版本
+
+PyInstaller 不能跨平台打包，必须在 Windows 10/11 x64 上执行。前置：Python 3.12 x64、Tesseract-OCR（UB Mannheim 安装包，默认装在 `C:\Program Files\Tesseract-OCR`，且含 `tessdata\eng.traineddata`）。以下命令在仓库根目录的 PowerShell 中运行；`requirements-build.txt` 里的 `-r requirements.txt` 按当前目录解析，所以不要换目录。
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+
+# 测试会真实调用 OCR，先把 Tesseract 加入 PATH
+$env:PATH += ";C:\Program Files\Tesseract-OCR"
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+# 收集依赖许可证（macOS 生成的那份不随仓库分发）
+$env:LABELDESK_TESSERACT = "C:\Program Files\Tesseract-OCR"
+$env:LABELDESK_TESSDATA = "C:\Program Files\Tesseract-OCR\tessdata"
+.venv\Scripts\python.exe packaging\collect_licenses.py
+.venv\Scripts\pyinstaller.exe --noconfirm --clean packaging\LabelDesk.spec
+
+# 冻结包自检：内置 OCR、Excel 往返、矢量 PDF 合并、界面资源
+$test = Join-Path $env:TEMP "LabelDesk-selftest"
+Remove-Item -Recurse -Force $test -ErrorAction SilentlyContinue   # 自检目录必须干净，否则会因文件已存在而失败
+$proc = Start-Process -FilePath ".\dist\LabelDesk\LabelDesk.exe" -ArgumentList "--self-test `"$test`"" -Wait -PassThru
+"ExitCode=$($proc.ExitCode)"
+Get-Content (Join-Path $test "PASS.txt")
+
+Compress-Archive -Path .\dist\LabelDesk -DestinationPath ".\dist\LabelDesk-0.5.0-win64.zip" -Force
+```
+
+产物是免安装目录 `dist\LabelDesk\`（入口 `LabelDesk.exe`）及 `dist\LabelDesk-0.5.0-win64.zip`。首次分发时 Windows SmartScreen 可能提示未知发布者（未签名），选择“更多信息 → 仍要运行”即可。
