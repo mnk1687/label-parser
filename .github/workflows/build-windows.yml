@@ -1,0 +1,72 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: 'x64'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+
+      - name: Install Tesseract OCR
+        shell: pwsh
+        run: |
+          choco install tesseract --yes --no-progress
+          $data = 'C:\Program Files\Tesseract-OCR\tessdata'
+          if (!(Test-Path "$data\eng.traineddata")) {
+            Invoke-WebRequest 'https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata' -OutFile "$data\eng.traineddata"
+          }
+          "C:\Program Files\Tesseract-OCR" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build app
+        shell: pwsh
+        env:
+          LABELDESK_TESSERACT: C:\Program Files\Tesseract-OCR
+          LABELDESK_TESSDATA: C:\Program Files\Tesseract-OCR\tessdata
+        run: |
+          python packaging\collect_licenses.py
+          pyinstaller --noconfirm --clean packaging\LabelDesk.spec
+
+      - name: Self-test frozen app
+        shell: pwsh
+        run: |
+          $test = Join-Path $env:RUNNER_TEMP 'LabelDesk-selftest'
+          Remove-Item -Recurse -Force $test -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath '.\dist\LabelDesk\LabelDesk.exe' -ArgumentList "--self-test `"$test`"" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            Get-ChildItem -Recurse $test -ErrorAction SilentlyContinue | Out-String | Write-Host
+            Get-Content (Join-Path $env:TEMP 'LabelDesk-startup-error.log') -ErrorAction SilentlyContinue
+            throw "LabelDesk self-test failed with exit code $($proc.ExitCode)"
+          }
+          Get-Content (Join-Path $test 'PASS.txt')
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LabelDesk-0.5.0-win64
+          path: dist/LabelDesk
+          if-no-files-found: error
+          retention-days: 30
