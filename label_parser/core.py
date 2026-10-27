@@ -31,6 +31,7 @@ class ScanResult:
     pages: int = 0
     targets: list[str] = field(default_factory=list)
     files: int = 0
+    cached_files: int = 0
 
 
 def contains(text: str, keyword: str) -> bool:
@@ -118,11 +119,74 @@ def ocr(page: fitz.Page, rect: fitz.Rect) -> str:
     return pytesseract.image_to_string(im, lang='eng', config='--psm 11', timeout=90)
 
 
+def ocr_headers(page, boxes):
+    """Recognize red barcode headers in one atlas per raster page."""
+    if not boxes:return {}
+    scale=4
+    pix=page.get_pixmap(matrix=fitz.Matrix(scale,scale),colorspace=fitz.csRGB)
+    image=Image.frombytes('RGB',(pix.width,pix.height),pix.samples)
+    tiles=[];height=0
+    for frame in boxes:
+        r=crop_rect(page,frame)
+        tile=image.crop((int(r.x0*scale),int(r.y0*scale),int(r.x1*scale),int((frame.y0+1)*scale)))
+        arr=np.array(tile)
+        red=(arr[:,:,0]>140)&(arr[:,:,1]<180)&(arr[:,:,2]<180)&(arr[:,:,0].astype(int)>arr[:,:,1].astype(int)+40)
+        if red.sum()>20:tile=Image.fromarray(np.where(red,0,255).astype('uint8')).convert('RGB')
+        tiles.append((tile,height));height+=tile.height+32
+    atlas=Image.new('RGB',(max(t.width for t,_ in tiles)+24,height+24),'white')
+    for tile,y in tiles:atlas.paste(tile,(12,y+12))
+    data=pytesseract.image_to_data(atlas,config='--psm 6 -c tessedit_char_whitelist=0123456789',output_type=pytesseract.Output.DICT,timeout=90)
+    result={}
+    for n,text in enumerate(data['text']):
+        if not re.fullmatch(r'\d{13}',text):continue
+        mid=data['top'][n]+data['height'][n]/2
+        for i,(tile,y) in enumerate(tiles):
+            if y+12<=mid<=y+12+tile.height:result[i]=text;break
+    return result
+
+
+def scan_batch(inputs, keywords, barcode_models=None, progress=print, excluded_sources=(), use_cache=True):
+    """Cache immutable per-file results, keyed by content SHA256 and matching rules."""
+    import hashlib,json,sqlite3,tempfile,os
+    keywords=list(dict.fromkeys(k.strip().upper() for k in keywords if k.strip()))
+    if not keywords:raise ValueError('没有有效目标款号')
+    excluded={str(Path(p).resolve()) for p in excluded_sources}
+    paths=list(dict.fromkeys(str(Path(p).expanduser().resolve()) for p in inputs if str(Path(p).expanduser().resolve()) not in excluded))
+    if not paths:raise ValueError('没有待识别的标签文件')
+    result=ScanResult(keywords[0] if len(keywords)==1 else '批次标签汇总',[],[],targets=keywords,files=len(paths))
+    cache_root=Path(tempfile.gettempdir())/f'label-parser-{os.getuid() if hasattr(os,"getuid") else "local"}'
+    cache_root.mkdir(mode=0o700,exist_ok=True)
+    db=sqlite3.connect(cache_root/'recognition-v3.sqlite')
+    try:
+        db.execute('CREATE TABLE IF NOT EXISTS results (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        rules=json.dumps(["v3-atlas-1",keywords,barcode_models or {}],sort_keys=True).encode()
+        for name in paths:
+            path=Path(name)
+            if not path.is_file():raise ValueError(f'文件不存在：{name}')
+            digest=hashlib.sha256(rules)
+            with path.open('rb') as handle:
+                for chunk in iter(lambda:handle.read(1024*1024),b''):digest.update(chunk)
+            # Path included because provenance must identify the actual selected file.
+            digest.update(name.encode());key=digest.hexdigest()
+            saved=db.execute('SELECT value FROM results WHERE key=?',(key,)).fetchone() if use_cache else None
+            if saved:
+                data=json.loads(saved[0]);part=ScanResult(**{k:v for k,v in data.items() if k!='matches'},matches=[Match(**m) for m in data['matches']])
+                result.cached_files+=1;progress(f'复用识别结果 · {path.name}')
+            else:
+                part=_scan_uncached([name],keywords,barcode_models,progress)
+                if use_cache and not part.warnings:
+                    db.execute('INSERT OR REPLACE INTO results VALUES (?,?)',(key,json.dumps(asdict(part),ensure_ascii=False)));db.commit()
+            result.pages+=part.pages;result.matches.extend(part.matches);result.warnings.extend(part.warnings)
+        rank={k:i for i,k in enumerate(keywords)};result.matches.sort(key=lambda m:rank[m.model])
+        return result
+    finally:db.close()
+
+
 def scan(inputs: list[str], keyword: str, progress: Callable[[str], None] = print) -> ScanResult:
     return scan_batch(inputs, [keyword], progress=progress)
 
 
-def scan_batch(inputs: list[str], keywords: list[str], barcode_models=None,
+def _scan_uncached(inputs: list[str], keywords: list[str], barcode_models=None,
                progress: Callable[[str], None] = print, excluded_sources=()) -> ScanResult:
     keywords=list(dict.fromkeys(k.strip().upper() for k in keywords if k.strip()))
     if not keywords:raise ValueError('没有有效目标款号')
@@ -147,22 +211,24 @@ def scan_batch(inputs: list[str], keywords: list[str], barcode_models=None,
                 for index,page in enumerate(doc):
                     progress(f'{path.name} · {index+1}/{len(doc)} 页 · 已匹配 {len(result.matches)} 个标签')
                     result.pages+=1
-                    text=page.get_text();boxes=frames(page)
+                    textpage=page.get_textpage()
+                    text=page.get_text(textpage=textpage);boxes=frames(page)
                     if not boxes:
                         if not text.strip() or any(identify(text)[:2]):
                             result.warnings.append(f'{path.name} 第 {index+1} 页未找到青色标签边框，需检查。')
                         continue
                     found=set()
-                    for frame in boxes:
+                    header_codes=ocr_headers(page,boxes) if not text.strip() else {}
+                    for frame_index,frame in enumerate(boxes):
                         try:
                             rect=crop_rect(page,frame)
-                            region_text=page.get_text(clip=rect)
+                            region_text=page.get_textbox(rect,textpage=textpage)
                             direct,linked,codes=identify(region_text)
                             method='pdf-text'
                             # Raster labels often have only a red identifier above the frame.
                             if not direct and not linked and not codes and not re.search(r'\b[A-Z]{2,}\d{2,}-\d',region_text.upper()):
                                 header=fitz.Rect(rect.x0,rect.y0,rect.x1,min(rect.y1,frame.y0+2))
-                                header_text=ocr(page,header)
+                                header_text=header_codes.get(frame_index) or ocr(page,header)
                                 d,l,c=identify(header_text)
                                 if l:
                                     region_text=header_text;direct,linked,codes=d,l,c;method='ocr'

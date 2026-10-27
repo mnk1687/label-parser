@@ -16,11 +16,12 @@ class ProductionBatch:
     barcode_models: dict[str, str]
     rows: int
     warnings: list[str] = field(default_factory=list)
+    barcode_evidence: dict = field(default_factory=dict)
 
 
 def read_prodsheet(source: str, progress=print) -> ProductionBatch:
     path=Path(source).expanduser().resolve()
-    models=[];mapping={};conflicts=set();warnings=[];rows=0
+    models=[];mapping={};conflicts=set();warnings=[];rows=0;evidence={}
     with open_source(path) as doc:
         for index,page in enumerate(doc):
             progress(f'读取 ProdSheet · {index+1}/{len(doc)} 页')
@@ -60,9 +61,10 @@ def read_prodsheet(source: str, progress=print) -> ProductionBatch:
                     warnings.append(f'ProdSheet 第 {index+1} 页 {value} 未找到唯一同行条码；仍可按款号匹配。')
                     continue
                 code=codes[0]
+                evidence.setdefault(code,[]).append({'page':index+1,'row':pos+1,'model':value})
                 if code in mapping and mapping[code]!=value:conflicts.add(code)
                 else:mapping[code]=value
             if barcode_head is None:warnings.append(f'第 {index+1} 页缺少 Barcode 列，仅支持款号直接匹配。')
     for code in conflicts:
-        mapping.pop(code,None);warnings.append(f'条码 {code} 对应多个款号，已禁用该关联。')
-    return ProductionBatch(str(path),models,mapping,rows,warnings)
+        mapping.pop(code,None);evidence.pop(code,None);warnings.append(f'条码 {code} 对应多个款号，已禁用该关联。')
+    return ProductionBatch(str(path),models,mapping,rows,warnings,evidence)
