@@ -7,6 +7,18 @@ import pytesseract
 from PIL import Image
 from .core import open_source
 
+@dataclass
+class ProductionRow:
+    article: str
+    size: str
+    txt1: str
+    txt2: str
+    barcode: str
+    quantity: int
+    page: int = 0
+    row: int = 0
+
+
 MODEL = re.compile(r'[A-Z]{2,}\d+(?:-\d+){2,}')
 
 @dataclass
@@ -17,11 +29,12 @@ class ProductionBatch:
     rows: int
     warnings: list[str] = field(default_factory=list)
     barcode_evidence: dict = field(default_factory=dict)
+    details: list[ProductionRow] = field(default_factory=list)
 
 
 def read_prodsheet(source: str, progress=print) -> ProductionBatch:
     path=Path(source).expanduser().resolve()
-    models=[];mapping={};conflicts=set();warnings=[];rows=0;evidence={}
+    models=[];mapping={};conflicts=set();warnings=[];rows=0;evidence={};details=[]
     with open_source(path) as doc:
         for index,page in enumerate(doc):
             progress(f'读取 ProdSheet · {index+1}/{len(doc)} 页')
@@ -48,6 +61,19 @@ def read_prodsheet(source: str, progress=print) -> ProductionBatch:
                     warnings.append(f'ProdSheet 第 {index+1} 页 TXT1 值无法识别：{w[4]}')
             if not model_words:raise ValueError(f'第 {index+1} 页 TXT1 列未提取到款号')
             barcode_head=next((w for w in headers if w[4].upper()=='BARCODE'),None)
+            # Keep split TXT2 cells that continue after a page break.
+            def cell(left,right,top,bottom):
+                parts=sorted([v for v in words if left-1<=v[0]<right-1 and top<=v[1]<bottom],key=lambda v:(round(v[1],1),v[0]))
+                value=''
+                for part in parts:
+                    value+=('' if not value or value.endswith('-') else ' ')+part[4]
+                return value
+            starts=[v[0] for v in headers]
+            column={v[4].upper():(v[0],starts[i+1] if i+1<len(starts) else page.rect.width) for i,v in enumerate(headers)}
+            txt2_bounds=column.get('TXT2')
+            if txt2_bounds and details:
+                tail=cell(*txt2_bounds,h[3],model_words[0][0][1]-2)
+                if tail:details[-1].txt2+=('' if details[-1].txt2.endswith('-') else ' ')+tail
             for pos,(w,value) in enumerate(model_words):
                 rows+=1
                 if value not in models:models.append(value)
@@ -55,16 +81,25 @@ def read_prodsheet(source: str, progress=print) -> ProductionBatch:
                     continue
                 bx=barcode_head[0]
                 br=next((v[0] for v in headers if v[0]>barcode_head[2]),page.rect.width)
-                bottom=model_words[pos+1][0][1]-2 if pos+1<len(model_words) else page.rect.height-35
+                bottom=model_words[pos+1][0][1]-2 if pos+1<len(model_words) else min([v[1] for v in words if v[4] in ('Items:', 'Page') and v[1]>w[1]] or [page.rect.height-35])
                 codes=[v[4] for v in words if bx-2<=v[0]<br-2 and w[1]-2<=v[1]<bottom and re.fullmatch(r'\d{13}',v[4])]
                 if len(codes)!=1:
                     warnings.append(f'ProdSheet 第 {index+1} 页 {value} 未找到唯一同行条码；仍可按款号匹配。')
                     continue
                 code=codes[0]
+                def get_col(name):
+                    bounds=column.get(name)
+                    return cell(*bounds,w[1]-2,bottom) if bounds else ''
+                article_bounds=(headers[0][0],column.get('SIZE',(h[0],))[0])
+                article=cell(*article_bounds,w[1]-2,bottom)
+                qty_bounds=(headers[-1][0],page.rect.width)
+                qty=cell(*qty_bounds,w[1]-2,bottom)
+                if not qty.isdigit():raise ValueError(f'第 {index+1} 页第 {pos+1} 条 Quantity 无法读取：{qty}')
+                details.append(ProductionRow(article,get_col('SIZE'),value,get_col('TXT2'),code,int(qty),index+1,pos+1))
                 evidence.setdefault(code,[]).append({'page':index+1,'row':pos+1,'model':value})
                 if code in mapping and mapping[code]!=value:conflicts.add(code)
                 else:mapping[code]=value
             if barcode_head is None:warnings.append(f'第 {index+1} 页缺少 Barcode 列，仅支持款号直接匹配。')
     for code in conflicts:
         mapping.pop(code,None);evidence.pop(code,None);warnings.append(f'条码 {code} 对应多个款号，已禁用该关联。')
-    return ProductionBatch(str(path),models,mapping,rows,warnings,evidence)
+    return ProductionBatch(str(path),models,mapping,rows,warnings,evidence,details)

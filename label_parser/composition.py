@@ -1,0 +1,143 @@
+"""Excel-driven per-Barcode compositions; preserve original PDF graphics."""
+from dataclasses import dataclass,asdict
+from pathlib import Path
+from collections import defaultdict
+import fitz
+import re,json,subprocess,tempfile,shutil,zipfile
+import xml.etree.ElementTree as ET
+from .prodsheet import ProductionRow
+from .workflow import role
+
+SLOTS={'MAIN':(71.76,106.44),'COMPO2':(71.76,305.64),'COMPO1':(71.76,504.85),'COMPO3':(351.40,105.31),'CARE':(351.40,304.51)}
+
+@dataclass
+class Composition:
+    row: ProductionRow
+    matches: list
+    missing: list[str]
+
+
+def sorted_rows(rows):
+    sizes={'XXS':0,'XS':1,'S':2,'M':3,'L':4,'XL':5,'XXL':6,'XXXL':7}
+    return sorted(rows,key=lambda r:(r.txt1,r.txt2.rsplit('-',1)[0],100+int(r.size) if r.size.isdigit() else sizes.get(r.size,99),r.barcode))
+
+
+def make_compositions(job,rows=None):
+    rows=sorted_rows(rows if rows is not None else job.batch.details)
+    index=defaultdict(list)
+    for m in job.result.matches if job.result else []:
+        if m.selected:index[(m.model,m.barcode,m.source)].append(m)
+    items=[]
+    sources=[p for p in job.sources if p in job.files_selected]
+    for row in rows:
+        matches=[];missing=[]
+        if not sources:missing.append('未选择标签来源文件')
+        missing_roles=set(SLOTS)-{role(p) for p in sources}
+        if missing_roles:missing.append('缺少参考版式所需文件：'+', '.join(sorted(missing_roles)))
+        used=set()
+        for path in sources:
+            found=index[(row.txt1,row.barcode,path)]
+            kind=role(path)
+            if kind not in SLOTS:missing.append(f'{Path(path).name} 没有对应版面位置');continue
+            if kind in used:missing.append(f'{kind} 存在多个来源文件，无法确定唯一版面');continue
+            used.add(kind)
+            if len(found)!=1:missing.append(f'{Path(path).name}：匹配 {len(found)} 条，应为 1 条');continue
+            matches.extend(found)
+        items.append(Composition(row,matches,missing))
+    return items
+
+
+def compose(item,documents=None):
+    if item.missing:raise ValueError('；'.join(item.missing))
+    out=fitz.open();p=out.new_page(width=612,height=792)
+    owned=documents is None;documents={} if owned else documents
+    try:
+        for m in item.matches:
+            if m.source not in documents:documents[m.source]=fitz.open(m.source)
+            src=documents[m.source];clip=fitz.Rect(m.rect);x,y=SLOTS[role(m.source)]
+            # All original objects remain untouched; only the source viewport and placement change.
+            x-=1;y-=(clip.width-2)*.065
+            target=fitz.Rect(x,y,x+clip.width,y+clip.height)
+            if not p.rect.contains(target):raise ValueError('标签尺寸超出参考版式，无法原尺寸组合')
+            p.show_pdf_page(target,src,m.page-1,clip=clip,keep_proportion=True)
+        out.set_metadata({'title':item.row.txt2,'subject':item.row.barcode,'creator':'Label Studio 0.4 — source PDF composition'})
+        return out
+    except Exception:
+        out.close();raise
+    finally:
+        if owned:
+            for d in documents.values():d.close()
+
+
+def write_excel(rows,source,output,preview=None):
+    bundle=Path.home()/'.cache/codex-runtimes/codex-primary-runtime/dependencies'
+    node=bundle/'node/bin/node';modules=bundle/'node/node_modules'
+    if not node.exists() or not (modules/'@oai/artifact-tool').exists():raise RuntimeError('Excel 导出需要本机 Codex 的 artifact-tool 运行时')
+    output=Path(output).resolve()
+    if output.exists():raise FileExistsError(f'文件已存在：{output}')
+    output.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='label-excel-') as folder:
+        folder=Path(folder);(folder/'node_modules').symlink_to(modules,target_is_directory=True)
+        shutil.copyfile(Path(__file__).with_name('workbook.mjs'),folder/'workbook.mjs')
+        payload=folder/'input.json';payload.write_text(json.dumps({'source':Path(source).name,'rows':[asdict(r) for r in sorted_rows(rows)]},ensure_ascii=False))
+        args=[str(node),str(folder/'workbook.mjs'),str(payload),str(output)]
+        if preview:args.append(str(Path(preview).resolve()))
+        completed=subprocess.run(args,capture_output=True,text=True,timeout=180)
+        if completed.returncode:raise RuntimeError('Excel 生成失败：'+completed.stderr[-1800:])
+    return output
+
+
+def read_excel(path):
+    """Read the exported six-column manifest, not the original in-memory ordering."""
+    ns={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    rows=[]
+    with zipfile.ZipFile(path) as z:
+        shared=[]
+        if 'xl/sharedStrings.xml' in z.namelist():
+            shared=[''.join(n.itertext()) for n in ET.fromstring(z.read('xl/sharedStrings.xml')).findall('s:si',ns)]
+        sheet=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+        for row in sheet.findall('s:sheetData/s:row',ns):
+            if row.attrib['r']=='1':continue
+            values={}
+            for c in row.findall('s:c',ns):
+                col=re.sub('[0-9]','',c.attrib['r']);v=c.find('s:v',ns)
+                if c.attrib.get('t')=='inlineStr':value=''.join(c.find('s:is',ns).itertext())
+                elif v is None:value=''
+                elif c.attrib.get('t')=='s':value=shared[int(v.text)]
+                else:value=v.text or ''
+                values[col]=value
+            if not values.get('C'):continue
+            if not re.fullmatch(r'\d{13}',values.get('E','')):raise ValueError('Excel 中存在无效 Barcode')
+            rows.append(ProductionRow(values.get('A',''),values.get('B',''),values['C'],values.get('D',''),values['E'],int(float(values.get('F','0')))))
+    return rows
+
+
+def safe_name(value):
+    name=re.sub(r'[\\/:*?"<>|\x00-\x1f]','_',value).strip().strip('.')
+    if not name:raise ValueError('TXT1/TXT2 为空，不能命名')
+    return name
+
+
+def export_compositions(job,folder,barcodes,progress=print):
+    folder=Path(folder)
+    if folder.exists() and any(folder.iterdir()):raise FileExistsError('输出文件夹不是空目录，请选择新的目录')
+    folder.mkdir(parents=True,exist_ok=True)
+    # The sorted workbook is the authoritative intermediate for folders/names.
+    excel=write_excel(job.batch.details,job.batch.source,folder/'ProdSheet_排序明细.xlsx')
+    records=read_excel(excel)
+    selected=[r for r in records if r.barcode in barcodes]
+    if not selected:raise ValueError('请先勾选需要导出的明细')
+    items=make_compositions(job,selected)
+    errors=[f'{i.row.txt2}：'+ '；'.join(i.missing) for i in items if i.missing]
+    if errors:raise ValueError('已保留 Excel，但未导出不完整组合：\n'+'\n'.join(errors[:10]))
+    targets=[folder/safe_name(i.row.txt1)/(safe_name(i.row.txt2)+'.pdf') for i in items]
+    if len(set(targets))!=len(targets):raise ValueError('TXT2 文件名重复，未生成 PDF，请核对 Excel')
+    docs={}
+    try:
+        for index,(item,target) in enumerate(zip(items,targets)):
+            target.parent.mkdir(parents=True,exist_ok=True)
+            with compose(item,docs) as document:document.save(target,garbage=4,deflate=True)
+            progress(f'导出组合 {index+1}/{len(items)} · {item.row.txt2}')
+    finally:
+        for d in docs.values():d.close()
+    return excel,targets

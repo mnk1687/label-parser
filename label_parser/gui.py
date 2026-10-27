@@ -1,273 +1,231 @@
-"""Batch workspace: one import, explicit selections, inspectable evidence, separated PDFs."""
-import copy
-import os
-import queue
-import subprocess
-import sys
-import threading
-from datetime import datetime
+"""Modern light desktop workspace for Excel-first per-barcode compositions."""
+import queue,threading,copy,subprocess,sys,os
 from pathlib import Path
-from collections import Counter
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
-from PIL import ImageTk
-from .core import preview
-from .workflow import discover,recognize,build_plan,export_plan,explain,role
+import customtkinter as ctk
+from PIL import Image,ImageTk
+from .workflow import discover,recognize,role,explain
+from .composition import sorted_rows,make_compositions,compose,write_excel,export_compositions
+
+BG='#F5F7FB';WHITE='#FFFFFF';INK='#17233B';MUTED='#738096';BLUE='#4269E1';LINE='#E7ECF3'
+ctk.set_appearance_mode('light')
 
 class App:
     def __init__(self,root):
-        self.root=root;self.jobs=[];self.issues=[];self.events=queue.Queue();self.working=False
-        self.plan=[];self.photo=None;self.preview_key=None;self.preview_image=None;self.last_folder=None
-        root.title('Label Studio · 批次标签工作台');root.geometry('1380x900');root.minsize(1120,760)
-        style=ttk.Style();style.theme_use('clam')
-        style.configure('.',font=('PingFang SC',11),background='#edf3f6',foreground='#173346')
-        style.configure('TButton',padding=(12,8));style.configure('Primary.TButton',background='#087e8c',foreground='white')
-        style.configure('Treeview',rowheight=30,background='white',fieldbackground='white',borderwidth=0)
-        style.configure('Treeview.Heading',background='#dce9ee',padding=(6,7),font=('PingFang SC',10,'bold'))
-        style.map('Treeview',background=[('selected','#d2edf0')],foreground=[('selected','#163446')])
-        style.configure('TNotebook.Tab',padding=(16,9))
-        main=ttk.Frame(root,padding=20);main.pack(fill='both',expand=True);main.columnconfigure(0,weight=1);main.rowconfigure(5,weight=1)
-        title=ttk.Frame(main);title.grid(row=0,column=0,sticky='ew')
-        ttk.Label(title,text='批次标签工作台',font=('PingFang SC',24,'bold')).pack(side='left')
-        ttk.Label(title,text='TXT1  →  标签款号  →  Barcode  →  关联文件',font=('Menlo',11),foreground='#517381').pack(side='right')
-        ttk.Label(main,text='整批导入 · 按款号核对关联 · 勾选后分别导出',foreground='#517381').grid(row=1,column=0,sticky='w',pady=(3,12))
-        actions=ttk.Frame(main);actions.grid(row=2,column=0,sticky='ew')
-        self.import_btn=ttk.Button(actions,text='导入整批 PDF',style='Primary.TButton',command=self.choose_files);self.import_btn.pack(side='left')
-        self.folder_btn=ttk.Button(actions,text='导入批次文件夹',command=self.choose_folder);self.folder_btn.pack(side='left',padx=8)
-        self.rescan_btn=ttk.Button(actions,text='重新识别',command=self.rescan);self.rescan_btn.pack(side='left')
-        self.export_btn=ttk.Button(actions,text='查看导出清单（0）',style='Primary.TButton',command=self.show_plan,state='disabled');self.export_btn.pack(side='right')
-        self.batch_var=tk.StringVar()
-        bar=ttk.Frame(main);bar.grid(row=3,column=0,sticky='ew',pady=12)
-        ttk.Label(bar,text='当前批次').pack(side='left')
-        self.batch_combo=ttk.Combobox(bar,textvariable=self.batch_var,state='readonly',width=40);self.batch_combo.pack(side='left',padx=10);self.batch_combo.bind('<<ComboboxSelected>>',self.render_job)
-        self.summary=tk.StringVar(value='一次选择 ProdSheet 与 MAIN / CARE / COMPO 等全部 PDF')
-        ttk.Label(bar,textvariable=self.summary).pack(side='left',padx=8)
-        self.status=tk.StringVar(value='导出前需勾选款号；文件默认勾选。不同批次、不同文件不会合并。')
-        ttk.Label(main,textvariable=self.status,wraplength=1250).grid(row=4,column=0,sticky='w',pady=(0,8))
-        self.tabs=ttk.Notebook(main);self.tabs.grid(row=5,column=0,sticky='nsew')
-        review=ttk.Frame(self.tabs,padding=10);self.tabs.add(review,text='识别与关联')
-        export_tab=ttk.Frame(self.tabs,padding=12);self.tabs.add(export_tab,text='导出清单')
-        panes=ttk.Panedwindow(review,orient='horizontal');panes.pack(fill='both',expand=True)
-        left=ttk.Frame(panes);center=ttk.Frame(panes);right=ttk.Frame(panes)
-        panes.add(left,weight=1);panes.add(center,weight=2);panes.add(right,weight=3)
-        select_tabs=ttk.Notebook(left);select_tabs.pack(fill='both',expand=True)
-        model_panel=ttk.Frame(select_tabs,padding=5);file_panel=ttk.Frame(select_tabs,padding=5)
-        select_tabs.add(model_panel,text='勾选款号');select_tabs.add(file_panel,text='勾选文件')
-        self.models=self.tree(model_panel,[('pick','导出',45),('model','TXT1 款号',150),('count','标签',45)])
-        self.models.bind('<ButtonRelease-1>',lambda e:self.check_click(e,'model'));self.models.bind('<space>',lambda e:self.toggle_check('model'))
-        self.models.bind('<<TreeviewSelect>>',self.render_matches)
-        mbuttons=ttk.Frame(model_panel);mbuttons.pack(fill='x',pady=5)
-        ttk.Button(mbuttons,text='全选款号',command=lambda:self.select_all('model',True)).pack(side='left')
-        ttk.Button(mbuttons,text='清空',command=lambda:self.select_all('model',False)).pack(side='left',padx=6)
-        self.files=self.tree(file_panel,[('pick','导出',45),('role','类型',65),('name','文件名',180)])
-        self.files.bind('<ButtonRelease-1>',lambda e:self.check_click(e,'file'));self.files.bind('<space>',lambda e:self.toggle_check('file'))
-        fb=ttk.Frame(file_panel);fb.pack(fill='x',pady=5)
-        ttk.Button(fb,text='全选文件',command=lambda:self.select_all('file',True)).pack(side='left')
-        ttk.Button(fb,text='清空',command=lambda:self.select_all('file',False)).pack(side='left',padx=6)
-        ttk.Label(left,text='点击款号查看；点击 ☐ / ☑ 控制导出。',foreground='#517381',wraplength=245).pack(anchor='w',pady=5)
-        ttk.Label(center,text='匹配标签',font=('PingFang SC',13,'bold')).pack(anchor='w',pady=(3,9))
-        self.matches=self.tree(center,[('type','文件',75),('barcode','Barcode',135),('page','页',40),('method','识别方式',105)])
-        self.matches.bind('<<TreeviewSelect>>',self.show_match)
-        self.detail_tabs=ttk.Notebook(right);self.detail_tabs.pack(fill='both',expand=True,padx=(10,0))
-        pic=ttk.Frame(self.detail_tabs);trace=ttk.Frame(self.detail_tabs)
-        self.detail_tabs.add(pic,text='标签预览');self.detail_tabs.add(trace,text='文件关联链')
-        self.canvas=tk.Canvas(pic,bg='white',width=360,height=200,highlightthickness=1,highlightbackground='#b5d4df');self.canvas.pack(fill='both',expand=True)
-        self.canvas.bind('<Configure>',self.show_match)
-        self.trace=tk.Text(trace,wrap='word',font=('PingFang SC',11),bg='white',fg='#173346',relief='flat',padx=14,pady=14,width=38,state='disabled')
-        ts=ttk.Scrollbar(trace,command=self.trace.yview);self.trace.configure(yscrollcommand=ts.set);ts.pack(side='right',fill='y');self.trace.pack(fill='both',expand=True)
-        self.detail=tk.StringVar(value='选择标签后可查看完整文件名、页码及关联依据')
-        ttk.Label(right,textvariable=self.detail,wraplength=390).pack(anchor='w',padx=10,pady=6)
-        ttk.Button(right,text='打开当前来源 PDF',command=self.open_source).pack(anchor='e',pady=4)
-        # Export controls are fixed above the expanding plan table.
-        opts=ttk.Frame(export_tab);opts.pack(fill='x',pady=(0,12))
-        ttk.Label(opts,text='拆分方式').pack(side='left')
-        self.split=tk.StringVar(value='按批次 + 文件分开')
-        self.split_combo=ttk.Combobox(opts,textvariable=self.split,values=['按批次 + 文件分开','按批次 + 款号 + 文件分开'],width=25,state='readonly');self.split_combo.pack(side='left',padx=8);self.split_combo.bind('<<ComboboxSelected>>',lambda e:self.update_plan())
-        ttk.Label(opts,text='清晰度').pack(side='left',padx=(15,0))
-        self.dpi=tk.StringVar(value='300');ttk.Combobox(opts,textvariable=self.dpi,values=['200','300','400'],state='readonly',width=6).pack(side='left',padx=8)
-        ttk.Label(opts,text='DPI').pack(side='left')
-        self.save_btn=ttk.Button(opts,text='导出清单中的 PDF',style='Primary.TButton',command=self.save,state='disabled');self.save_btn.pack(side='right')
-        self.plan_summary=tk.StringVar(value='尚未勾选款号。到“识别与关联”勾选需要导出的款号和文件。')
-        ttk.Label(export_tab,textvariable=self.plan_summary,wraplength=1000).pack(anchor='w',pady=(0,8))
-        self.plan_tree=self.tree(export_tab,[('batch','批次',135),('file','来源文件',200),('model','款号',150),('count','页数',60),('output','独立输出 PDF',400)])
-        self.open_btn=ttk.Button(export_tab,text='打开导出文件夹',command=lambda:self.open_path(self.last_folder),state='disabled');self.open_btn.pack(anchor='e',pady=(8,0))
-        footer=ttk.Frame(main);footer.grid(row=6,column=0,sticky='ew',pady=(10,0))
-        self.progress=ttk.Progressbar(footer,mode='indeterminate');self.progress.pack(fill='x')
-        self.notice=tk.Text(main,height=2,wrap='word',font=('PingFang SC',10),bg='#edf3f6',fg='#8a5a28',relief='flat',state='disabled');self.notice.grid(row=7,column=0,sticky='ew',pady=(6,0))
-        root.after(100,self.poll)
+        self.root=root;self.jobs=[];self.events=queue.Queue();self.working=False
+        self.selected={};self.items=[];self.visible=[];self.preview_cache={};self.photo=None;self.last_folder=None
+        root.title('LabelDesk · 生产标签');root.geometry('1450x920');root.minsize(1180,760);root.configure(fg_color=BG)
+        root.grid_rowconfigure(0,weight=1);root.grid_columnconfigure(1,weight=1)
+        self.font=ctk.CTkFont(family='PingFang SC',size=13)
+        side=ctk.CTkFrame(root,width=210,corner_radius=0,fg_color=WHITE);side.grid(row=0,column=0,sticky='nsew');side.grid_propagate(False)
+        ctk.CTkLabel(side,text='LabelDesk',text_color=INK,font=ctk.CTkFont(size=27,weight='bold')).pack(anchor='w',padx=24,pady=(30,0))
+        ctk.CTkLabel(side,text='生产标签工作台',text_color=MUTED,font=self.font).pack(anchor='w',padx=24,pady=(2,28))
+        self.import_btn=self.button(side,'＋  导入整批 PDF',self.choose_files);self.import_btn.pack(fill='x',padx=18)
+        self.folder_btn=self.button(side,'选择批次文件夹',self.choose_folder,False);self.folder_btn.pack(fill='x',padx=18,pady=8)
+        ctk.CTkLabel(side,text='当前批次',text_color=MUTED,font=self.font).pack(anchor='w',padx=24,pady=(25,5))
+        self.batch_choice=ctk.CTkOptionMenu(side,values=['尚未导入'],command=self.change_job,width=170,fg_color='#EEF2FC',button_color='#E3EAFB',text_color=INK);self.batch_choice.pack(padx=18,fill='x')
+        ctk.CTkLabel(side,text='输出流程',text_color=MUTED,font=self.font).pack(anchor='w',padx=24,pady=(32,5))
+        for label in ['01   整理 ProdSheet 明细','02   核对 Barcode 组合','03   TXT1 文件夹 / TXT2 PDF']:
+            ctk.CTkLabel(side,text=label,text_color=INK,font=ctk.CTkFont(size=12),anchor='w').pack(fill='x',padx=24,pady=7)
+        ctk.CTkLabel(side,text='源文件保持不变\n原生 PDF 内容直接组合',justify='left',text_color=MUTED,font=ctk.CTkFont(size=11)).pack(side='bottom',anchor='w',padx=24,pady=26)
+        main=ctk.CTkFrame(root,fg_color='transparent');main.grid(row=0,column=1,sticky='nsew',padx=26,pady=24);main.grid_columnconfigure(0,weight=1);main.grid_rowconfigure(3,weight=1)
+        head=ctk.CTkFrame(main,fg_color='transparent');head.grid(row=0,column=0,sticky='ew')
+        ctk.CTkLabel(head,text='明细与组合',font=ctk.CTkFont(size=27,weight='bold'),text_color=INK).pack(side='left')
+        self.export_btn=self.button(head,'导出所选组合',self.save);self.export_btn.pack(side='right')
+        self.excel_btn=self.button(head,'导出排序 Excel',self.save_excel,False);self.excel_btn.pack(side='right',padx=10)
+        self.summary=tk.StringVar(value='导入生产单与标签文件，自动整理为可核对的生产明细。')
+        ctk.CTkLabel(main,textvariable=self.summary,text_color=MUTED,font=self.font,anchor='w').grid(row=1,column=0,sticky='ew',pady=(3,18))
+        filters=ctk.CTkFrame(main,fg_color=WHITE,corner_radius=12);filters.grid(row=2,column=0,sticky='ew',pady=(0,14))
+        self.search=ctk.CTkEntry(filters,placeholder_text='搜索 TXT1、TXT2 或 Barcode',width=270,height=38,border_width=0,fg_color='#F3F5F9',font=self.font);self.search.pack(side='left',padx=14,pady=12);self.search.bind('<KeyRelease>',lambda e:self.render_rows())
+        self.model_filter=ctk.CTkOptionMenu(filters,values=['全部款号'],width=200,command=lambda v:self.render_rows(),fg_color='#F3F5F9',button_color='#E7ECF4',text_color=INK);self.model_filter.pack(side='left',padx=5)
+        self.button(filters,'勾选当前筛选',lambda:self.select_visible(True),False).pack(side='left',padx=8)
+        self.button(filters,'清空勾选',lambda:self.select_visible(False),False).pack(side='left')
+        self.count=tk.StringVar(value='已选 0 条');ctk.CTkLabel(filters,textvariable=self.count,text_color=MUTED,font=self.font).pack(side='right',padx=14)
+        body=ctk.CTkFrame(main,fg_color='transparent');body.grid(row=3,column=0,sticky='nsew');body.grid_rowconfigure(0,weight=1);body.grid_columnconfigure(0,weight=3);body.grid_columnconfigure(1,weight=2)
+        tablecard=ctk.CTkFrame(body,fg_color=WHITE,corner_radius=14);tablecard.grid(row=0,column=0,sticky='nsew',padx=(0,14));tablecard.grid_columnconfigure(0,weight=1);tablecard.grid_rowconfigure(1,weight=1)
+        ctk.CTkLabel(tablecard,text='生产明细   /   按 TXT1 · 颜色 · 尺码排序',text_color=INK,font=ctk.CTkFont(size=14,weight='bold'),anchor='w').grid(row=0,column=0,sticky='ew',padx=16,pady=14)
+        holder=ctk.CTkFrame(tablecard,fg_color=WHITE,corner_radius=0);holder.grid(row=1,column=0,sticky='nsew',padx=12,pady=(0,12));holder.grid_columnconfigure(0,weight=1);holder.grid_rowconfigure(0,weight=1)
+        style=ttk.Style();style.theme_use('clam');style.configure('Modern.Treeview',font=('PingFang SC',11),rowheight=36,background=WHITE,fieldbackground=WHITE,foreground=INK,borderwidth=0,relief='flat');style.configure('Modern.Treeview.Heading',font=('PingFang SC',10,'bold'),background='#F5F7FB',foreground=MUTED,borderwidth=0,padding=8,relief='flat');style.map('Modern.Treeview',background=[('selected','#EDF2FF')],foreground=[('selected',INK)])
+        self.table=ttk.Treeview(holder,style='Modern.Treeview',columns=['pick','size','txt1','txt2','barcode','quantity','status'],show='headings',selectmode='browse')
+        for col,text,width in [('pick','选择',45),('size','Size',50),('txt1','TXT1',135),('txt2','TXT2 / 文件名',210),('barcode','Barcode',140),('quantity','数量',55),('status','组合',70)]:self.table.heading(col,text=text);self.table.column(col,width=width,minwidth=40,stretch=False)
+        self.table.tag_configure('alternate',background='#FAFBFD');self.table.tag_configure('missing',foreground='#C17D2D')
+        y=ttk.Scrollbar(holder,command=self.table.yview);x=ttk.Scrollbar(holder,orient='horizontal',command=self.table.xview);self.table.configure(yscrollcommand=y.set,xscrollcommand=x.set)
+        self.table.grid(row=0,column=0,sticky='nsew');y.grid(row=0,column=1,sticky='ns');x.grid(row=1,column=0,sticky='ew')
+        self.table.bind('<<TreeviewSelect>>',self.show_item);self.table.bind('<ButtonRelease-1>',self.check_click);self.table.bind('<space>',lambda e:self.toggle_row())
+        previewcard=ctk.CTkFrame(body,fg_color=WHITE,corner_radius=14);previewcard.grid(row=0,column=1,sticky='nsew');previewcard.grid_columnconfigure(0,weight=1);previewcard.grid_rowconfigure(2,weight=1)
+        self.preview_title=tk.StringVar(value='组合预览')
+        ctk.CTkLabel(previewcard,textvariable=self.preview_title,font=ctk.CTkFont(size=15,weight='bold'),text_color=INK,anchor='w').grid(row=0,column=0,padx=18,pady=(16,8),sticky='ew')
+        self.view_mode=ctk.CTkSegmentedButton(previewcard,values=['组合预览','关联来源'],command=self.switch_view,selected_color=BLUE,font=self.font);self.view_mode.grid(row=1,column=0,padx=16,pady=(0,12),sticky='ew');self.view_mode.set('组合预览')
+        self.canvas=tk.Canvas(previewcard,bg='#F2F4F8',highlightthickness=0,width=330,height=410);self.canvas.grid(row=2,column=0,sticky='nsew',padx=16,pady=(0,12));self.canvas.bind('<Configure>',self.draw_preview)
+        self.trace=ctk.CTkTextbox(previewcard,fg_color='#F8FAFC',text_color=INK,font=self.font,wrap='word');self.trace.grid(row=2,column=0,sticky='nsew',padx=16,pady=(0,12));self.trace.grid_remove()
+        self.path_text=tk.StringVar(value='TXT1 文件夹 / TXT2.pdf')
+        ctk.CTkLabel(previewcard,textvariable=self.path_text,text_color=MUTED,font=ctk.CTkFont(size=11),wraplength=330,justify='left',anchor='w').grid(row=3,column=0,sticky='ew',padx=18,pady=(0,14))
+        bottom=ctk.CTkFrame(main,fg_color='transparent');bottom.grid(row=4,column=0,sticky='ew',pady=(14,0))
+        self.status=tk.StringVar(value='等待导入 · 不改变原文件，不再栅格化整个标签')
+        ctk.CTkLabel(bottom,textvariable=self.status,text_color=MUTED,font=ctk.CTkFont(size=12),anchor='w',wraplength=850).pack(side='left')
+        self.open_btn=self.button(bottom,'打开输出目录',lambda:self.open_path(self.last_folder),False);self.open_btn.pack(side='right')
+        self.progress=ctk.CTkProgressBar(main,height=3,progress_color=BLUE);self.progress.grid(row=5,column=0,sticky='ew',pady=(10,0));self.progress.set(0)
+        self.busy(False);root.after(100,self.poll)
 
-    def tree(self,parent,columns):
-        frame=ttk.Frame(parent);frame.pack(fill='both',expand=True)
-        frame.rowconfigure(0,weight=1);frame.columnconfigure(0,weight=1)
-        tree=ttk.Treeview(frame,columns=[c[0] for c in columns],show='headings',selectmode='browse',height=8)
-        for key,title,width in columns:tree.heading(key,text=title);tree.column(key,width=width,minwidth=35,stretch=True)
-        y=ttk.Scrollbar(frame,command=tree.yview);x=ttk.Scrollbar(frame,orient='horizontal',command=tree.xview)
-        tree.configure(yscrollcommand=y.set,xscrollcommand=x.set);tree.grid(row=0,column=0,sticky='nsew');y.grid(row=0,column=1,sticky='ns');x.grid(row=1,column=0,sticky='ew')
-        return tree
+    def button(self,parent,text,command,primary=True):
+        return ctk.CTkButton(parent,text=text,command=command,height=38,corner_radius=9,font=self.font,fg_color=BLUE if primary else '#EDF1F8',hover_color='#3659C8' if primary else '#E1E8F3',text_color='white' if primary else INK)
 
     def current(self):
-        i=self.batch_combo.current()
-        return self.jobs[i] if 0<=i<len(self.jobs) else None
+        value=self.batch_choice.get()
+        return next((j for j in self.jobs if f'{j.name} · {j.key[:4]}'==value),None)
 
     def busy(self,on):
         self.working=on
-        for b in [self.import_btn,self.folder_btn,self.rescan_btn]:b.configure(state='disabled' if on else 'normal')
-        self.save_btn.configure(state='normal' if self.plan and not on else 'disabled')
-        self.export_btn.configure(state='normal' if self.plan and not on else 'disabled')
-        if on:self.progress.start(15)
-        else:self.progress.stop()
+        for b in [self.import_btn,self.folder_btn]:b.configure(state='disabled' if on else 'normal')
+        self.excel_btn.configure(state='normal' if self.current() and not on else 'disabled')
+        selected=len(self.selected.get(self.current().key,set())) if self.current() else 0
+        self.export_btn.configure(state='normal' if selected and not on else 'disabled',text=f'导出所选组合（{selected}）' if selected else '导出所选组合')
+        if on:self.progress.configure(mode='indeterminate');self.progress.start()
+        else:self.progress.stop();self.progress.configure(mode='determinate');self.progress.set(0)
 
     def choose_files(self):
-        paths=filedialog.askopenfilenames(title='一次选择 ProdSheet 和本批次所有标签 PDF',filetypes=[('PDF','*.pdf')])
+        paths=filedialog.askopenfilenames(title='选择 ProdSheet 和本批次全部标签 PDF',filetypes=[('PDF','*.pdf')])
         if paths:self.load(paths)
 
     def choose_folder(self):
-        path=filedialog.askdirectory(title='选择批次文件夹；可包含多个批次子文件夹')
+        path=filedialog.askdirectory(title='选择批次文件夹')
         if path:self.load([path])
 
     def load(self,paths):
-        self.busy(True);self.status.set('自动识别文件角色及批次…')
+        self.busy(True)
         def worker():
             try:
-                jobs,issues=discover(paths,lambda s:self.events.put(('progress',s)))
-                for job in jobs:recognize(job,lambda s:self.events.put(('progress',s)))
+                jobs,issues=discover(paths,self.message)
+                for job in jobs:recognize(job,self.message)
                 self.events.put(('loaded',(jobs,issues)))
             except Exception as e:self.events.put(('error',str(e)))
         threading.Thread(target=worker,daemon=True).start()
 
-    def rescan(self):
-        if self.jobs:self.load([p for j in self.jobs for p in [j.batch.source]+j.sources])
+    def message(self,text):self.events.put(('progress',text))
 
-    def render_job(self,event=None):
+    def change_job(self,value=None):
         job=self.current()
-        for tree in [self.models,self.files,self.matches]:tree.delete(*tree.get_children())
-        self.canvas.delete('all');self.preview_key=None
         if not job:return
-        counts=Counter(m.model for m in job.result.matches) if job.result else Counter()
-        for i,model in enumerate(job.batch.models):self.models.insert('','end',iid=str(i),values=('☑' if model in job.models_selected else '☐',model,counts[model]))
-        for i,path in enumerate(job.sources):self.files.insert('','end',iid=str(i),values=('☑' if path in job.files_selected else '☐',role(path),Path(path).name))
-        self.summary.set(f'{len(job.batch.models)} 款 · {len(job.sources)} 文件 · {len(job.result.matches) if job.result else 0} 标签')
-        if job.batch.models:self.models.selection_set('0')
-        self.update_plan()
+        self.items=make_compositions(job);self.selected.setdefault(job.key,set());self.preview_cache={}
+        models=sorted(job.batch.models);self.model_filter.configure(values=['全部款号']+models);self.model_filter.set('全部款号')
+        self.summary.set(f'{job.name}   /   {len(models)} 个 TXT1   ·   {len(self.items)} 条生产明细   ·   {len(job.sources)} 份标签文件')
+        self.render_rows();self.busy(False)
 
-    def check_click(self,event,kind):
-        tree=self.models if kind=='model' else self.files
-        if tree.identify_column(event.x)=='#1' and tree.identify_row(event.y):self.toggle_check(kind)
+    def render_rows(self):
+        self.table.delete(*self.table.get_children());job=self.current()
+        if not job:return
+        query=self.search.get().strip().upper();model=self.model_filter.get();self.visible=[]
+        for i,item in enumerate(self.items):
+            r=item.row
+            if model!='全部款号' and r.txt1!=model:continue
+            if query and query not in (r.txt1+' '+r.txt2+' '+r.barcode).upper():continue
+            self.visible.append(i);tags=('missing',) if item.missing else (('alternate',) if len(self.visible)%2==0 else ())
+            self.table.insert('','end',iid=str(i),values=('☑' if r.barcode in self.selected[job.key] else '☐',r.size,r.txt1,r.txt2,r.barcode,r.quantity,'待检查' if item.missing else f'{len(item.matches)}/{len(job.sources)}'),tags=tags)
+        self.count.set(f'已选 {len(self.selected[job.key])} 条')
+        if self.visible:self.table.selection_set(str(self.visible[0]))
+        else:self.canvas.delete('all')
 
-    def toggle_check(self,kind):
+    def check_click(self,event):
+        if self.table.identify_column(event.x)=='#1' and self.table.identify_row(event.y):self.toggle_row()
+
+    def toggle_row(self):
         if self.working:return
-        job=self.current();tree=self.models if kind=='model' else self.files
-        items=tree.selection()
-        if not job or not items:return
-        i=int(items[0]);value=job.batch.models[i] if kind=='model' else job.sources[i]
-        selected=job.models_selected if kind=='model' else job.files_selected
-        if value in selected:selected.remove(value)
-        else:selected.add(value)
-        vals=list(tree.item(items[0],'values'));vals[0]='☑' if value in selected else '☐';tree.item(items[0],values=vals);self.update_plan()
+        job=self.current();ids=self.table.selection()
+        if not job or not ids:return
+        item=self.items[int(ids[0])]
+        if item.missing:messagebox.showwarning('组合不完整','\n'.join(item.missing));return
+        selected=self.selected[job.key];code=item.row.barcode
+        if code in selected:selected.remove(code)
+        else:selected.add(code)
+        values=list(self.table.item(ids[0],'values'));values[0]='☑' if code in selected else '☐';self.table.item(ids[0],values=values)
+        self.count.set(f'已选 {len(selected)} 条');self.busy(False)
         return 'break'
 
-    def select_all(self,kind,on):
-        if self.working:return
+    def select_visible(self,on):
+        if self.working or not self.current():return
+        chosen=self.selected[self.current().key]
+        if on:chosen.update(self.items[i].row.barcode for i in self.visible if not self.items[i].missing)
+        else:chosen.clear()
+        self.render_rows();self.busy(False)
+
+    def switch_view(self,value):
+        if value=='组合预览':self.trace.grid_remove();self.canvas.grid()
+        else:self.canvas.grid_remove();self.trace.grid()
+
+    def show_item(self,event=None):
+        ids=self.table.selection()
+        if not ids:return
+        item=self.items[int(ids[0])];r=item.row
+        self.preview_title.set(f'{r.txt1}  /  {r.size}')
+        self.path_text.set(f'{r.txt1}/\n{r.txt2}.pdf\nBarcode  {r.barcode}')
+        self.trace.configure(state='normal');self.trace.delete('1.0','end')
+        if item.missing:self.trace.insert('end','组合不完整：\n'+'\n'.join(item.missing))
+        elif item.matches:self.trace.insert('end',explain(self.current(),item.matches[0]))
+        self.trace.configure(state='disabled')
+        if r.barcode not in self.preview_cache and not item.missing:
+            with compose(item) as doc:
+                pix=doc[0].get_pixmap(dpi=110);self.preview_cache[r.barcode]=Image.frombytes('RGB',(pix.width,pix.height),pix.samples)
+        self.draw_preview()
+
+    def draw_preview(self,event=None):
+        ids=self.table.selection();self.canvas.delete('all')
+        if not ids:return
+        im=self.preview_cache.get(self.items[int(ids[0])].row.barcode)
+        if im is None:return
+        im=im.copy();im.thumbnail((max(50,self.canvas.winfo_width()-20),max(50,self.canvas.winfo_height()-20)))
+        self.photo=ImageTk.PhotoImage(im);self.canvas.create_image(self.canvas.winfo_width()/2,self.canvas.winfo_height()/2,image=self.photo)
+
+    def save_excel(self):
         job=self.current()
         if not job:return
-        if kind=='model':job.models_selected=set(job.batch.models) if on else set()
-        else:job.files_selected=set(job.sources) if on else set()
-        current=self.models.selection();self.render_job()
-        if current:self.models.selection_set(current)
-
-    def render_matches(self,event=None):
-        self.matches.delete(*self.matches.get_children());self.canvas.delete('all');self.preview_key=None
-        job=self.current();items=self.models.selection()
-        if not job or not job.result or not items:return
-        model=job.batch.models[int(items[0])]
-        for i,m in enumerate(job.result.matches):
-            if m.model!=model:continue
-            method=('OCR · ' if m.method.startswith('ocr') else '')+('条码关联' if 'barcode' in m.method else '款号直匹')
-            self.matches.insert('','end',iid=str(i),values=(role(m.source),m.barcode,m.page,method))
-        rows=self.matches.get_children()
-        if rows:self.matches.selection_set(rows[0])
-        else:self.detail.set(f'{model} 暂无匹配标签，请检查批次文件和待检查项。')
-
-    def chosen_match(self):
-        job=self.current();items=self.matches.selection()
-        return (job,job.result.matches[int(items[0])]) if job and job.result and items else (None,None)
-
-    def show_match(self,event=None):
-        job,m=self.chosen_match()
-        if not m:return
-        key=(m.source,m.page,tuple(m.rect))
-        try:
-            if self.preview_key!=key:
-                self.preview_image=preview(m);self.preview_key=key
-                self.trace.configure(state='normal');self.trace.delete('1.0','end');self.trace.insert('end',explain(job,m));self.trace.configure(state='disabled')
-            im=self.preview_image.copy();im.thumbnail((max(60,self.canvas.winfo_width()-16),max(60,self.canvas.winfo_height()-16)))
-            self.photo=ImageTk.PhotoImage(im);self.canvas.delete('all');self.canvas.create_image(self.canvas.winfo_width()/2,self.canvas.winfo_height()/2,image=self.photo)
-            self.detail.set(f'{m.model}\n{Path(m.source).name} · 第 {m.page} 页\nBarcode {m.barcode or "未读取"}')
-        except Exception as e:self.detail.set(str(e))
-
-    def update_plan(self):
-        self.plan=build_plan(self.jobs,self.split.get()=='按批次 + 款号 + 文件分开')
-        self.plan_tree.delete(*self.plan_tree.get_children())
-        for i,p in enumerate(self.plan):self.plan_tree.insert('','end',iid=str(i),values=(p.job.name,Path(p.source).name,', '.join(p.models),len(p.matches),p.name))
-        self.export_btn.configure(text=f'查看导出清单（{len(self.plan)}）')
-        pages=sum(len(p.matches) for p in self.plan)
-        self.plan_summary.set(f'将生成 {len(self.plan)} 个独立 PDF，共 {pages} 页。按勾选款号与文件的交集导出，不混合批次或来源文件。' if self.plan else '请先勾选需要导出的款号和文件；不会默认全量导出。')
-        self.busy(self.working)
-
-    def show_plan(self):self.update_plan();self.tabs.select(1)
+        path=filedialog.asksaveasfilename(title='保存排序明细',initialfile=job.name+'_排序明细.xlsx',defaultextension='.xlsx',filetypes=[('Excel','*.xlsx')])
+        if not path:return
+        self.busy(True)
+        def worker():
+            try:write_excel(job.batch.details,job.batch.source,path);self.events.put(('excel',Path(path)))
+            except Exception as e:self.events.put(('error',str(e)))
+        threading.Thread(target=worker,daemon=True).start()
 
     def save(self):
-        if not self.plan:return
-        folder=filedialog.askdirectory(title=f'选择保存位置：生成 {len(self.plan)} 个独立 PDF')
-        if not folder:return
-        output=Path(folder)/('标签导出_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
-        plan=copy.deepcopy(self.plan);dpi=int(self.dpi.get());self.busy(True)
+        job=self.current()
+        if not job or not self.selected[job.key]:return
+        directory=filedialog.askdirectory(title='选择组合输出目录：TXT1 文件夹 / TXT2.pdf')
+        if not directory:return
+        folder=Path(directory)/(job.name+'_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
+        job=copy.deepcopy(job);codes=set(self.selected[job.key]);self.busy(True)
         def worker():
             try:
-                paths=export_plan(plan,output,dpi,lambda s:self.events.put(('progress',s)))
-                self.events.put(('saved',(output,len(paths))))
+                excel,paths=export_compositions(job,folder,codes,self.message)
+                self.events.put(('saved',(folder,len(paths))))
             except Exception as e:self.events.put(('error',str(e)))
         threading.Thread(target=worker,daemon=True).start()
 
     def open_path(self,path):
         if not path:return
-        try:
-            if sys.platform=='darwin':subprocess.run(['open',str(path)],check=True)
-            elif sys.platform=='win32':os.startfile(str(path))
-            else:subprocess.run(['xdg-open',str(path)],check=True)
-        except Exception as e:messagebox.showerror('无法打开',str(e))
-
-    def open_source(self):
-        _,m=self.chosen_match()
-        if m:self.open_path(m.source)
+        if sys.platform=='darwin':subprocess.run(['open',str(path)],check=False)
+        elif sys.platform=='win32':os.startfile(str(path))
+        else:subprocess.run(['xdg-open',str(path)],check=False)
 
     def poll(self):
         try:
             while True:
                 event,data=self.events.get_nowait()
                 if event=='progress':self.status.set(data)
-                elif event=='error':self.busy(False);self.status.set('处理未完成，请查看错误信息');messagebox.showerror('处理失败',data)
+                elif event=='error':self.busy(False);self.status.set('处理未完成');messagebox.showerror('请检查',data)
                 elif event=='loaded':
-                    incoming,issues=data
-                    # Preserve choices for existing batches; importing another batch adds to the workspace.
-                    known={j.key:j for j in self.jobs}
-                    for j in incoming:
-                        if j.key in known:
-                            j.models_selected=known[j.key].models_selected & set(j.batch.models)
-                            j.files_selected=(known[j.key].files_selected & set(j.sources)) | (set(j.sources)-set(known[j.key].sources))
-                        known[j.key]=j
-                    self.jobs=list(known.values());self.issues=issues
-                    self.batch_combo.configure(values=[f'{j.name} · {Path(j.batch.source).name}' for j in self.jobs])
-                    if self.jobs:self.batch_combo.current(0)
-                    self.busy(False);self.render_job()
-                    self.status.set(f'已识别 {len(self.jobs)} 个批次 · 复用 {sum(j.result.cached_files for j in incoming if j.result)} 个文件的识别结果。勾选款号后查看导出清单。')
-                    notes=issues+[w for j in self.jobs if j.result for w in j.result.warnings]
-                    self.notice.configure(state='normal');self.notice.delete('1.0','end');self.notice.insert('end','\n'.join(notes) or '没有报告识别异常。点击“文件关联链”可追溯 ProdSheet、直接匹配及条码关联。');self.notice.configure(state='disabled')
+                    jobs,issues=data;known={j.key:j for j in self.jobs}
+                    for job in jobs:known[job.key]=job
+                    self.jobs=list(known.values())
+                    if self.jobs:
+                        names=[f'{j.name} · {j.key[:4]}' for j in self.jobs];self.batch_choice.configure(values=names);self.batch_choice.set(names[0]);self.change_job()
+                    self.busy(False);self.status.set('；'.join(issues) if issues else '识别完成。先核对排序明细，再勾选需要导出的组合。')
                 elif event=='saved':
-                    self.last_folder,count=data;self.busy(False);self.open_btn.configure(state='normal')
-                    self.status.set(f'已生成 {count} 个独立 PDF：{self.last_folder}');self.open_path(self.last_folder)
+                    self.last_folder,n=data;self.busy(False);self.status.set(f'已生成排序 Excel 和 {n} 份组合 PDF，按 TXT1 分文件夹保存。');self.open_path(self.last_folder)
+                elif event=='excel':self.last_folder=data.parent;self.busy(False);self.status.set('排序 Excel 已保存：'+data.name);self.open_path(data)
         except queue.Empty:pass
         self.root.after(100,self.poll)
 
 def main():
-    root=tk.Tk();App(root);root.mainloop()
+    root=ctk.CTk();App(root);root.mainloop()
