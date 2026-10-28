@@ -25,7 +25,7 @@ def main():
         codes={r.barcode for r in job.batch.details if requested is None or r.txt1 in requested}
         if not codes:print('该批次没有选中款号：',job.name);continue
         excel,paths=export_compositions(job,args.output_dir/(job.name+'_'+job.key[:5]),codes)
-        print(f'已生成 {excel} 、{len(paths)} 份组合 PDF 和 {len({p.parent for p in paths})} 份款号汇总 PDF')
+        print(f'已生成 {excel} 、{len(paths)} 份组合 PDF 和 {len({p.parent for p in paths})} 份款号汇总 PDF，另含排序汇总/Excel顺序组合汇总.pdf')
     if issues:raise SystemExit(3)
 
 if __name__=='__main__':main()

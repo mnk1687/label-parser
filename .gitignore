@@ -8,3 +8,5 @@ dist/
 .pytest_cache/
 # 由 packaging/collect_licenses.py 在构建机上生成，随平台不同，不入库
 packaging/licenses/
+packaging/licenses/
+.build-venv/

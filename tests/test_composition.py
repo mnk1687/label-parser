@@ -59,3 +59,41 @@ class SummaryTest(unittest.TestCase):
             # Selecting a subset produces only those pages, not all sibling PDFs.
             with fitz.open(export_summary(entries[:1],root/'selected.pdf')) as doc:self.assertEqual(len(doc),1)
             with self.assertRaises(ValueError):export_summary([],root/'empty.pdf')
+
+class ExcelOrderSummaryTest(unittest.TestCase):
+    def test_workbook_row_order_across_models_and_selection(self):
+        from openpyxl import Workbook
+        from label_parser.composition import export_excel_summary
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);entries=[];pixels={}
+            # Deliberately unlike alphabetical model/color or ascending size order.
+            rows=[ProductionRow('',size,model,model+'-'+color+'-'+size,str(5208133300829+i),1)
+                  for i,(model,color,size) in enumerate([('FBM015-099-03','LT BLUE','40'),('FBL015-166-03','BLACK','28'),('FBM015-099-03','DK BLUE','28')])]
+            wb=Workbook();sheet=wb.active;sheet.append(['Article','Size','TXT1','TXT2','Barcode','Quantity'])
+            for i,row in enumerate(rows):
+                sheet.append([row.article,row.size,row.txt1,row.txt2,row.barcode,row.quantity]);sheet.append([None]*6)
+                path=root/f'{i}.pdf'
+                with fitz.open() as doc:
+                    page=doc.new_page();page.insert_text((40,40),row.txt2);page.draw_rect(fitz.Rect(40,80,120+i,180))
+                    doc.save(path);pixels[row.txt2]=page.get_pixmap().samples
+                entries.append((row,path))
+            excel=root/'manifest.xlsx';wb.save(excel);wb.close()
+            output=export_excel_summary(excel,list(reversed(entries)),root/'排序汇总'/'Excel顺序组合汇总.pdf')
+            with fitz.open(output) as doc:
+                self.assertEqual([x[1] for x in doc.get_toc()],[r.txt2 for r in rows])
+                for page,row in zip(doc,rows):
+                    self.assertEqual(page.get_pixmap().samples,pixels[row.txt2]);self.assertTrue(page.get_drawings())
+            with fitz.open(export_excel_summary(excel,[entries[2],entries[0]],root/'subset.pdf')) as doc:
+                self.assertEqual([x[1] for x in doc.get_toc()],[rows[0].txt2,rows[2].txt2])
+            with self.assertRaises(FileExistsError):export_excel_summary(excel,entries,output)
+            wrong=ProductionRow('', '28','WRONG','WRONG-28','1111111111111',1)
+            with self.assertRaises(ValueError):export_excel_summary(excel,[(wrong,entries[0][1])],root/'wrong.pdf')
+
+    def test_portable_workbook_round_trip(self):
+        from label_parser.composition import write_excel,read_excel
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as tmp:
+            rows=[ProductionRow('CARELABEL_2-','28','FBM015-099-03','FBM015-099-03-DK BLUE-28','5208133300829',76)]
+            path=write_excel(rows,'生产单.pdf',Path(tmp)/'生产明细.xlsx')
+            self.assertEqual(read_excel(path),rows)
+            book=load_workbook(path);self.assertEqual(book.active['E2'].data_type,'s');self.assertEqual(book.active.freeze_panes,'D2');book.close()

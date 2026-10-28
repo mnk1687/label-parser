@@ -20,7 +20,7 @@ def self_test(folder):
     """Run the actual frozen imports, OCR, Excel, PDF and GUI resource path."""
     from PIL import Image,ImageDraw,ImageFont
     import pytesseract,fitz
-    from .composition import write_excel,read_excel,export_summary
+    from .composition import write_excel,read_excel,export_summary,export_excel_summary
     from .prodsheet import ProductionRow
     from .gui import App,ctk
     folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
@@ -38,5 +38,6 @@ def self_test(folder):
     summary=export_summary([(row,source)],folder/'summary.pdf')
     with fitz.open(summary) as doc:
         if len(doc)!=1 or not doc[0].get_drawings():raise RuntimeError('PDF vector test failed')
+    export_excel_summary(excel,[(row,source)],folder/'排序汇总'/'Excel顺序组合汇总.pdf')
     root=ctk.CTk();root.withdraw();App(root);root.update_idletasks();root.destroy()
     (folder/'PASS.txt').write_text('PASS: bundled OCR, Excel round trip, vector PDF merge, Tk/CustomTkinter UI resources.\nOCR: '+recognized,encoding='utf-8')

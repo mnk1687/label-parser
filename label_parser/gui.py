@@ -224,7 +224,7 @@ class App:
                         names=[f'{j.name} · {j.key[:4]}' for j in self.jobs];self.batch_choice.configure(values=names);self.batch_choice.set(names[0]);self.change_job()
                     self.busy(False);self.status.set('；'.join(issues) if issues else '识别完成。先核对排序明细，再勾选需要导出的组合。')
                 elif event=='saved':
-                    self.last_folder,n,k=data;self.busy(False);self.status.set(f'已生成排序 Excel、{n} 份单页组合和 {k} 份款号汇总 PDF，按尺码升序排列。');self.open_path(self.last_folder)
+                    self.last_folder,n,k=data;self.busy(False);self.status.set(f'已生成排序 Excel、{n} 份单页组合和 {k} 份款号汇总，另有 1 份按 Excel 行顺序排列的全批组合 PDF。');self.open_path(self.last_folder)
                 elif event=='excel':self.last_folder=data.parent;self.busy(False);self.status.set('排序 Excel 已保存：'+data.name);self.open_path(data)
         except queue.Empty:pass
         self.root.after(100,self.poll)

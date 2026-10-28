@@ -24,4 +24,4 @@ coll=COLLECT(exe,a.binaries,a.datas,strip=False,upx=False,name='LabelDesk')
 if sys.platform=='darwin':
     app=BUNDLE(coll,name='LabelDesk.app',bundle_identifier='com.labeldesk.desktop',
         info_plist={'CFBundleDisplayName':'LabelDesk 生产标签','CFBundleShortVersionString':'0.5.0',
-                    'NSHighResolutionCapable':True})
+                    'NSHighResolutionCapable':True,'LSMinimumSystemVersion':os.environ.get('LABELDESK_MIN_MACOS','14.0')})

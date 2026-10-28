@@ -1,0 +1,53 @@
+name: Build desktop installers
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['label_parser/**', 'desktop_entry.py', 'packaging/**', 'requirements*.txt', 'tests/**', '.github/workflows/build-desktop.yml']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install build-only OCR and installer compiler
+        shell: pwsh
+        run: |
+          choco install tesseract innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Build tool installation failed' }
+      - name: Build and verify standalone app
+        shell: pwsh
+        run: ./packaging/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LabelDesk-Windows-x64
+          path: |
+            dist/*-Setup.exe
+            dist/*-Portable.zip
+          if-no-files-found: error
+          retention-days: 30
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+      - name: Install build-only OCR
+        run: brew list tesseract || brew install tesseract
+      - name: Build and verify standalone app
+        run: bash packaging/build_mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LabelDesk-macOS-AppleSilicon
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 30

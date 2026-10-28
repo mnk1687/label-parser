@@ -119,7 +119,8 @@ def read_excel(path):
             values={}
             for c in row.findall('s:c',ns):
                 col=re.sub('[0-9]','',c.attrib['r']);v=c.find('s:v',ns)
-                if c.attrib.get('t')=='inlineStr':value=''.join(c.find('s:is',ns).itertext())
+                if c.attrib.get('t')=='inlineStr':
+                    inline=c.find('s:is',ns);value=''.join(inline.itertext()) if inline is not None else ''
                 elif v is None:value=''
                 elif c.attrib.get('t')=='s':value=shared[int(v.text)]
                 else:value=v.text or ''
@@ -136,26 +137,49 @@ def safe_name(value):
     return name
 
 
-def export_summary(entries, output):
-    """Merge explicit (ProductionRow, PDF path) pairs in color/size order."""
+def _merge_pdf_entries(entries, output, title):
+    """Merge only the explicit pages, preserving their given order and objects."""
     entries=list(entries);output=Path(output)
     if not entries:raise ValueError('没有可汇总的组合')
-    if len({r.txt1 for r,_ in entries})!=1:raise ValueError('汇总文件只能包含同一个 TXT1')
     if output.exists():raise FileExistsError(f'文件已存在：{output}')
-    ordered=sorted_rows([r for r,_ in entries])
-    paths={id(r):Path(p) for r,p in entries}
     with fitz.open() as merged:
         toc=[]
-        for row in ordered:
-            with fitz.open(paths[id(row)]) as source:
+        for row,path in entries:
+            with fitz.open(path) as source:
                 if len(source)!=1:raise ValueError(f'{row.txt2} 必须是单页组合 PDF')
                 merged.insert_pdf(source)
             toc.append([1,row.txt2,len(merged)])
         merged.set_toc(toc)
-        merged.set_metadata({'title':ordered[0].txt1+'汇总PDF','creator':'LabelDesk — original PDF page merge'})
+        merged.set_metadata({'title':title,'creator':'LabelDesk — original PDF page merge'})
         output.parent.mkdir(parents=True,exist_ok=True)
         merged.save(output,garbage=4,deflate=True)
     return output
+
+
+def export_summary(entries, output):
+    """Per-model summary retains color/size sorting."""
+    entries=list(entries)
+    if not entries:raise ValueError('没有可汇总的组合')
+    if len({r.txt1 for r,_ in entries})!=1:raise ValueError('汇总文件只能包含同一个 TXT1')
+    paths={id(r):p for r,p in entries}
+    ordered=sorted_rows([r for r,_ in entries])
+    return _merge_pdf_entries([(r,paths[id(r)]) for r in ordered],output,ordered[0].txt1+'汇总PDF')
+
+
+def export_excel_summary(excel, entries, output):
+    """Across models, follow the workbook's physical row order, never re-sort."""
+    entries=list(entries)
+    def key(row):return row.txt1,row.txt2,row.barcode
+    paths={key(r):p for r,p in entries}
+    if len(paths)!=len(entries):raise ValueError('待汇总的组合明细重复')
+    ordered=[];seen=set()
+    for row in read_excel(excel):
+        identity=key(row)
+        if identity not in paths:continue
+        if identity in seen:raise ValueError('Excel 中存在重复的组合明细')
+        ordered.append((row,paths[identity]));seen.add(identity)
+    if seen!=set(paths):raise ValueError('部分已导出组合在 Excel 中不存在，无法确定排序')
+    return _merge_pdf_entries(ordered,output,'Excel顺序组合汇总')
 
 
 def export_compositions(job,folder,barcodes,progress=print):
@@ -175,7 +199,8 @@ def export_compositions(job,folder,barcodes,progress=print):
     groups=defaultdict(list)
     for item,target in zip(items,targets):groups[item.row.txt1].append((item.row,target))
     summaries={model:folder/safe_name(model)/(safe_name(model)+'汇总PDF.pdf') for model in groups}
-    all_paths=targets+list(summaries.values())
+    ordered_summary=folder/'排序汇总'/'Excel顺序组合汇总.pdf'
+    all_paths=targets+list(summaries.values())+[ordered_summary]
     if len(set(all_paths))!=len(all_paths):raise ValueError('汇总文件名与组合文件名冲突')
     docs={}
     try:
@@ -188,4 +213,7 @@ def export_compositions(job,folder,barcodes,progress=print):
     for model,entries in groups.items():
         export_summary(entries,summaries[model])
         progress(f'已生成 {model}汇总PDF · {len(entries)} 页')
+    progress(f'正在按 Excel 行顺序汇总 {len(items)} 个组合…')
+    export_excel_summary(excel,[(i.row,p) for i,p in zip(items,targets)],ordered_summary)
+    progress(f'已生成排序汇总 · {len(items)} 页 · 每行一个组合')
     return excel,targets
