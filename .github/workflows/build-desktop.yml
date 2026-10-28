@@ -2,7 +2,7 @@ name: Build desktop installers
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [master]
     paths: ['label_parser/**', 'desktop_entry.py', 'packaging/**', 'requirements*.txt', 'tests/**', '.github/workflows/build-desktop.yml']
 permissions:
   contents: read
@@ -21,6 +21,10 @@ jobs:
         run: |
           choco install tesseract innosetup -y --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'Build tool installation failed' }
+          $data = 'C:\Program Files\Tesseract-OCR\tessdata'
+          if (!(Test-Path "$data\eng.traineddata")) {
+            Invoke-WebRequest 'https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata' -OutFile "$data\eng.traineddata"
+          }
       - name: Build and verify standalone app
         shell: pwsh
         run: ./packaging/build_windows.ps1

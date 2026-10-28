@@ -3,6 +3,8 @@ Set-Location (Split-Path $PSScriptRoot -Parent)
 if (-not $env:LABELDESK_TESSERACT) { $env:LABELDESK_TESSERACT = 'C:\Program Files\Tesseract-OCR' }
 $env:LABELDESK_TESSDATA = Join-Path $env:LABELDESK_TESSERACT 'tessdata'
 if (-not (Test-Path "$env:LABELDESK_TESSERACT\tesseract.exe")) { throw 'Build machine needs Tesseract. End users do not.' }
+# Tests call pytesseract directly, so the build machine's tesseract.exe must be on PATH.
+$env:PATH = "$env:LABELDESK_TESSERACT;$env:PATH"
 python -m pip install -r requirements-build.txt
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
 python packaging/collect_licenses.py
