@@ -18,5 +18,5 @@ smoke="$(mktemp -d)/smoke"
 "$stage/LabelDesk.app/Contents/MacOS/LabelDesk" --self-test "$smoke"
 test -f "$smoke/PASS.txt"
 ln -s /Applications "$stage/Applications"
-hdiutil create -volname LabelDesk -srcfolder "$stage" -ov -format UDZO dist/LabelDesk-0.5.0-macOS-AppleSilicon.dmg
-hdiutil verify dist/LabelDesk-0.5.0-macOS-AppleSilicon.dmg
+hdiutil create -volname LabelDesk -srcfolder "$stage" -ov -format UDZO dist/LabelDesk-0.6.0-macOS-AppleSilicon.dmg
+hdiutil verify dist/LabelDesk-0.6.0-macOS-AppleSilicon.dmg

@@ -22,4 +22,4 @@ $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $iscc)) { throw 'Build machine needs Inno Setup 6.' }
 & $iscc packaging/windows.iss
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
-Compress-Archive -Path dist/LabelDesk -DestinationPath dist/LabelDesk-0.5.0-Windows-x64-Portable.zip -Force
+Compress-Archive -Path dist/LabelDesk -DestinationPath dist/LabelDesk-0.6.0-Windows-x64-Portable.zip -Force

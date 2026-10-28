@@ -1,4 +1,4 @@
-#define AppVersion "0.5.0"
+#define AppVersion "0.6.0"
 [Setup]
 AppId={{C2AC846B-24F0-4ABE-9FB7-750C1E49DE03}
 AppName=LabelDesk
@@ -10,7 +10,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=LabelDesk-0.5.0-Windows-x64-Setup
+OutputBaseFilename=LabelDesk-0.6.0-Windows-x64-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

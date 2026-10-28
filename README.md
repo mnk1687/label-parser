@@ -1,4 +1,4 @@
-# LabelDesk v0.5.0 · 生产标签组合
+# LabelDesk v0.6.0 · 生产标签组合
 
 新版流程：**整批 PDF → ProdSheet 排序明细 Excel → TXT1 文件夹 → 以 TXT2 命名的单条 Barcode 组合 PDF**。
 
@@ -12,6 +12,26 @@
 4. 点击某条明细，右侧直接预览**最终组合页**；切换“关联来源”查看同条 Barcode 的具体源文件及页码。
 5. 点击首列复选框选择明细，或“勾选当前筛选”选择当前款号/搜索结果；不会默认勾选全部。
 6. “导出排序 Excel”可单独保存完整明细；“导出所选组合”先生成并重新读取完整排序 Excel，再按 Excel 中选中 Barcode 对应的 TXT1 和 TXT2 产出 PDF。
+
+## 分类排序页签（v0.6）
+
+在上方切换“组合导出 / 分类排序”，共用已识别批次和勾选明细，无需重新 OCR。
+
+分类排序页签右侧可选择 COMPO1、COMPO2、COMPO3、MAIN、CARE，并翻页查看六个一页的实际排版。未勾选时预览当前筛选结果；勾选后预览全部已勾选明细。点击“导出五类排序 PDF”生成独立目录：
+
+```text
+批次名_分类排序_时间戳/
+├── ProdSheet_排序明细.xlsx
+├── compo1排序PDF.pdf
+├── compo2排序PDF.pdf
+├── compo3排序PDF.pdf
+├── main排序PDF.pdf
+└── care排序PDF.pdf
+```
+
+五个 PDF 分别包含该类型标签，严格跟随本次 Excel 中选中行的顺序。A4 纵向、2 列 × 3 行，先左后右、再从上到下；最后一页不足六个时留空。不会按 Quantity 复制标签。保持完整裁切、原尺寸和原 PDF 对象，原有图片保持原图，预览图不参与导出。尺寸超过单元格或标签缺失/重复时停止，避免缩小、截断或静默跳过。
+
+本批次实测：每类 390 个标签、65 页，共五份 PDF；包含逐条 TXT2 书签。分类导出不生成五联组合 PDF，原组合页签仍保留原输出流程。
 
 ## 输出结构
 
@@ -119,7 +139,7 @@ $proc = Start-Process -FilePath ".\dist\LabelDesk\LabelDesk.exe" -ArgumentList "
 "ExitCode=$($proc.ExitCode)"
 Get-Content (Join-Path $test "PASS.txt")
 
-Compress-Archive -Path .\dist\LabelDesk -DestinationPath ".\dist\LabelDesk-0.5.0-win64.zip" -Force
+Compress-Archive -Path .\dist\LabelDesk -DestinationPath ".\dist\LabelDesk-0.6.0-win64.zip" -Force
 ```
 
-产物是免安装目录 `dist\LabelDesk\`（入口 `LabelDesk.exe`）及 `dist\LabelDesk-0.5.0-win64.zip`。首次分发时 Windows SmartScreen 可能提示未知发布者（未签名），选择“更多信息 → 仍要运行”即可。
+产物是免安装目录 `dist\LabelDesk\`（入口 `LabelDesk.exe`）及 `dist\LabelDesk-0.6.0-win64.zip`。首次分发时 Windows SmartScreen 可能提示未知发布者（未签名），选择“更多信息 → 仍要运行”即可。

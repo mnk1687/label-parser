@@ -7,6 +7,7 @@ from tkinter import ttk,filedialog,messagebox
 import customtkinter as ctk
 from PIL import Image,ImageTk
 from .workflow import discover,recognize,role,explain
+from .categories import KINDS,category_preview,export_categories
 from .composition import sorted_rows,make_compositions,compose,write_excel,export_compositions
 
 FONT_FAMILY='Microsoft YaHei UI' if sys.platform=='win32' else 'PingFang SC'
@@ -17,7 +18,7 @@ ctk.set_appearance_mode('light')
 class App:
     def __init__(self,root):
         self.root=root;self.jobs=[];self.events=queue.Queue();self.working=False
-        self.selected={};self.items=[];self.visible=[];self.preview_cache={};self.photo=None;self.last_folder=None
+        self.selected={};self.items=[];self.visible=[];self.preview_cache={};self.photo=None;self.last_folder=None;self.category_page=0;self.category_image=None
         root.title('LabelDesk · 生产标签');root.geometry('1450x920');root.minsize(1180,760);root.configure(fg_color=BG)
         root.grid_rowconfigure(0,weight=1);root.grid_columnconfigure(1,weight=1)
         self.font=ctk.CTkFont(family=FONT_FAMILY,size=13)
@@ -32,20 +33,22 @@ class App:
         for label in ['01   整理 ProdSheet 明细','02   核对 Barcode 组合','03   TXT1 文件夹 / TXT2 PDF']:
             ctk.CTkLabel(side,text=label,text_color=INK,font=ctk.CTkFont(size=12),anchor='w').pack(fill='x',padx=24,pady=7)
         ctk.CTkLabel(side,text='源文件保持不变\n原生 PDF 内容直接组合',justify='left',text_color=MUTED,font=ctk.CTkFont(size=11)).pack(side='bottom',anchor='w',padx=24,pady=26)
-        main=ctk.CTkFrame(root,fg_color='transparent');main.grid(row=0,column=1,sticky='nsew',padx=26,pady=24);main.grid_columnconfigure(0,weight=1);main.grid_rowconfigure(3,weight=1)
+        main=ctk.CTkFrame(root,fg_color='transparent');main.grid(row=0,column=1,sticky='nsew',padx=26,pady=24);main.grid_columnconfigure(0,weight=1);main.grid_rowconfigure(4,weight=1)
         head=ctk.CTkFrame(main,fg_color='transparent');head.grid(row=0,column=0,sticky='ew')
         ctk.CTkLabel(head,text='明细与组合',font=ctk.CTkFont(size=27,weight='bold'),text_color=INK).pack(side='left')
         self.export_btn=self.button(head,'导出所选组合',self.save);self.export_btn.pack(side='right')
         self.excel_btn=self.button(head,'导出排序 Excel',self.save_excel,False);self.excel_btn.pack(side='right',padx=10)
         self.summary=tk.StringVar(value='导入生产单与标签文件，自动整理为可核对的生产明细。')
         ctk.CTkLabel(main,textvariable=self.summary,text_color=MUTED,font=self.font,anchor='w').grid(row=1,column=0,sticky='ew',pady=(3,18))
-        filters=ctk.CTkFrame(main,fg_color=WHITE,corner_radius=12);filters.grid(row=2,column=0,sticky='ew',pady=(0,14))
+        self.feature_tabs=ctk.CTkSegmentedButton(main,values=['组合导出','分类排序'],command=self.switch_feature,selected_color=BLUE,font=self.font,height=38)
+        self.feature_tabs.grid(row=2,column=0,sticky='w',pady=(0,12));self.feature_tabs.set('组合导出')
+        filters=ctk.CTkFrame(main,fg_color=WHITE,corner_radius=12);filters.grid(row=3,column=0,sticky='ew',pady=(0,14))
         self.search=ctk.CTkEntry(filters,placeholder_text='搜索 TXT1、TXT2 或 Barcode',width=270,height=38,border_width=0,fg_color='#F3F5F9',font=self.font);self.search.pack(side='left',padx=14,pady=12);self.search.bind('<KeyRelease>',lambda e:self.render_rows())
         self.model_filter=ctk.CTkOptionMenu(filters,values=['全部款号'],width=200,command=lambda v:self.render_rows(),fg_color='#F3F5F9',button_color='#E7ECF4',text_color=INK);self.model_filter.pack(side='left',padx=5)
         self.button(filters,'勾选当前筛选',lambda:self.select_visible(True),False).pack(side='left',padx=8)
         self.button(filters,'清空勾选',lambda:self.select_visible(False),False).pack(side='left')
         self.count=tk.StringVar(value='已选 0 条');ctk.CTkLabel(filters,textvariable=self.count,text_color=MUTED,font=self.font).pack(side='right',padx=14)
-        body=ctk.CTkFrame(main,fg_color='transparent');body.grid(row=3,column=0,sticky='nsew');body.grid_rowconfigure(0,weight=1);body.grid_columnconfigure(0,weight=3);body.grid_columnconfigure(1,weight=2)
+        body=ctk.CTkFrame(main,fg_color='transparent');body.grid(row=4,column=0,sticky='nsew');body.grid_rowconfigure(0,weight=1);body.grid_columnconfigure(0,weight=3);body.grid_columnconfigure(1,weight=2)
         tablecard=ctk.CTkFrame(body,fg_color=WHITE,corner_radius=14);tablecard.grid(row=0,column=0,sticky='nsew',padx=(0,14));tablecard.grid_columnconfigure(0,weight=1);tablecard.grid_rowconfigure(1,weight=1)
         ctk.CTkLabel(tablecard,text='生产明细   /   按 TXT1 · 颜色 · 尺码排序',text_color=INK,font=ctk.CTkFont(size=14,weight='bold'),anchor='w').grid(row=0,column=0,sticky='ew',padx=16,pady=14)
         holder=ctk.CTkFrame(tablecard,fg_color=WHITE,corner_radius=0);holder.grid(row=1,column=0,sticky='nsew',padx=12,pady=(0,12));holder.grid_columnconfigure(0,weight=1);holder.grid_rowconfigure(0,weight=1)
@@ -62,13 +65,19 @@ class App:
         self.view_mode=ctk.CTkSegmentedButton(previewcard,values=['组合预览','关联来源'],command=self.switch_view,selected_color=BLUE,font=self.font);self.view_mode.grid(row=1,column=0,padx=16,pady=(0,12),sticky='ew');self.view_mode.set('组合预览')
         self.canvas=tk.Canvas(previewcard,bg='#F2F4F8',highlightthickness=0,width=330,height=410);self.canvas.grid(row=2,column=0,sticky='nsew',padx=16,pady=(0,12));self.canvas.bind('<Configure>',self.draw_preview)
         self.trace=ctk.CTkTextbox(previewcard,fg_color='#F8FAFC',text_color=INK,font=self.font,wrap='word');self.trace.grid(row=2,column=0,sticky='nsew',padx=16,pady=(0,12));self.trace.grid_remove()
+        self.category_controls=ctk.CTkFrame(previewcard,fg_color='transparent')
+        self.category_controls.grid(row=1,column=0,padx=16,pady=(0,12),sticky='ew');self.category_controls.grid_remove()
+        self.kind_choice=ctk.CTkOptionMenu(self.category_controls,values=list(KINDS),width=100,command=lambda _:self.refresh_category(),fg_color=BLUE);self.kind_choice.pack(side='left')
+        self.prev_page=ctk.CTkButton(self.category_controls,text='‹',width=32,command=lambda:self.move_category(-1));self.prev_page.pack(side='left',padx=(8,3))
+        self.page_label=ctk.CTkLabel(self.category_controls,text='0 / 0',text_color=MUTED);self.page_label.pack(side='left',padx=4)
+        self.next_page=ctk.CTkButton(self.category_controls,text='›',width=32,command=lambda:self.move_category(1));self.next_page.pack(side='left',padx=3)
         self.path_text=tk.StringVar(value='TXT1 文件夹 / TXT2.pdf')
         ctk.CTkLabel(previewcard,textvariable=self.path_text,text_color=MUTED,font=ctk.CTkFont(size=11),wraplength=330,justify='left',anchor='w').grid(row=3,column=0,sticky='ew',padx=18,pady=(0,14))
-        bottom=ctk.CTkFrame(main,fg_color='transparent');bottom.grid(row=4,column=0,sticky='ew',pady=(14,0))
+        bottom=ctk.CTkFrame(main,fg_color='transparent');bottom.grid(row=5,column=0,sticky='ew',pady=(14,0))
         self.status=tk.StringVar(value='等待导入 · 不改变原文件，不再栅格化整个标签')
         ctk.CTkLabel(bottom,textvariable=self.status,text_color=MUTED,font=ctk.CTkFont(size=12),anchor='w',wraplength=850).pack(side='left')
         self.open_btn=self.button(bottom,'打开输出目录',lambda:self.open_path(self.last_folder),False);self.open_btn.pack(side='right')
-        self.progress=ctk.CTkProgressBar(main,height=3,progress_color=BLUE);self.progress.grid(row=5,column=0,sticky='ew',pady=(10,0));self.progress.set(0)
+        self.progress=ctk.CTkProgressBar(main,height=3,progress_color=BLUE);self.progress.grid(row=6,column=0,sticky='ew',pady=(10,0));self.progress.set(0)
         self.busy(False);root.after(100,self.poll)
 
     def button(self,parent,text,command,primary=True):
@@ -83,7 +92,9 @@ class App:
         for b in [self.import_btn,self.folder_btn]:b.configure(state='disabled' if on else 'normal')
         self.excel_btn.configure(state='normal' if self.current() and not on else 'disabled')
         selected=len(self.selected.get(self.current().key,set())) if self.current() else 0
-        self.export_btn.configure(state='normal' if selected and not on else 'disabled',text=f'导出所选组合（{selected}）' if selected else '导出所选组合')
+        label='导出五类排序 PDF' if self.feature_tabs.get()=='分类排序' else '导出所选组合'
+        self.export_btn.configure(state='normal' if selected and not on else 'disabled',text=f'{label}（{selected}）' if selected else label)
+        self.feature_tabs.configure(state='disabled' if on else 'normal')
         if on:self.progress.configure(mode='indeterminate');self.progress.start()
         else:self.progress.stop();self.progress.configure(mode='determinate');self.progress.set(0)
 
@@ -128,6 +139,7 @@ class App:
         self.count.set(f'已选 {len(self.selected[job.key])} 条')
         if self.visible:self.table.selection_set(str(self.visible[0]))
         else:self.canvas.delete('all')
+        if self.feature_tabs.get()=='分类排序':self.refresh_category()
 
     def check_click(self,event):
         if self.table.identify_column(event.x)=='#1' and self.table.identify_row(event.y):self.toggle_row()
@@ -143,6 +155,7 @@ class App:
         else:selected.add(code)
         values=list(self.table.item(ids[0],'values'));values[0]='☑' if code in selected else '☐';self.table.item(ids[0],values=values)
         self.count.set(f'已选 {len(selected)} 条');self.busy(False)
+        if self.feature_tabs.get()=='分类排序':self.refresh_category()
         return 'break'
 
     def select_visible(self,on):
@@ -151,12 +164,46 @@ class App:
         if on:chosen.update(self.items[i].row.barcode for i in self.visible if not self.items[i].missing)
         else:chosen.clear()
         self.render_rows();self.busy(False)
+        if self.feature_tabs.get()=='分类排序':self.refresh_category()
+
+    def switch_feature(self,value):
+        self.category_page=0
+        if value=='分类排序':
+            self.view_mode.grid_remove();self.category_controls.grid();self.trace.grid_remove();self.canvas.grid();self.refresh_category()
+        else:
+            self.category_controls.grid_remove();self.view_mode.grid();self.switch_view(self.view_mode.get());self.show_item()
+        self.busy(self.working)
+
+    def category_items(self):
+        job=self.current()
+        if not job:return []
+        chosen=self.selected.get(job.key,set())
+        return [i for n,i in enumerate(self.items) if not i.missing and (i.row.barcode in chosen if chosen else n in self.visible)]
+
+    def move_category(self,delta):
+        self.category_page+=delta;self.refresh_category()
+
+    def refresh_category(self):
+        items=self.category_items();pages=(len(items)+5)//6
+        self.category_page=max(0,min(self.category_page,max(0,pages-1)))
+        self.page_label.configure(text=f'{self.category_page+1 if pages else 0} / {pages}')
+        self.prev_page.configure(state='normal' if self.category_page>0 else 'disabled');self.next_page.configure(state='normal' if self.category_page+1<pages else 'disabled')
+        kind=self.kind_choice.get();self.preview_title.set(kind+' · 六个一页预览');self.category_image=None
+        self.path_text.set(f'{kind.lower()}排序PDF.pdf\nA4 · 2 列 × 3 行 · 左到右、上到下\n'+('预览已勾选明细' if self.current() and self.selected.get(self.current().key) else '尚未勾选：预览当前筛选明细'))
+        if items:
+            try:
+                with category_preview(items[self.category_page*6:self.category_page*6+6],kind) as doc:
+                    pix=doc[0].get_pixmap(dpi=100);self.category_image=Image.frombytes('RGB',(pix.width,pix.height),pix.samples)
+            except ValueError as e:self.path_text.set(str(e))
+        self.draw_preview()
 
     def switch_view(self,value):
         if value=='组合预览':self.trace.grid_remove();self.canvas.grid()
         else:self.canvas.grid_remove();self.trace.grid()
 
     def show_item(self,event=None):
+        if self.feature_tabs.get()=='分类排序':
+            self.refresh_category();return
         ids=self.table.selection()
         if not ids:return
         item=self.items[int(ids[0])];r=item.row
@@ -173,8 +220,9 @@ class App:
 
     def draw_preview(self,event=None):
         ids=self.table.selection();self.canvas.delete('all')
-        if not ids:return
-        im=self.preview_cache.get(self.items[int(ids[0])].row.barcode)
+        if self.feature_tabs.get()=='分类排序':im=self.category_image
+        elif ids:im=self.preview_cache.get(self.items[int(ids[0])].row.barcode)
+        else:return
         if im is None:return
         im=im.copy();im.thumbnail((max(50,self.canvas.winfo_width()-20),max(50,self.canvas.winfo_height()-20)))
         self.photo=ImageTk.PhotoImage(im);self.canvas.create_image(self.canvas.winfo_width()/2,self.canvas.winfo_height()/2,image=self.photo)
@@ -193,14 +241,19 @@ class App:
     def save(self):
         job=self.current()
         if not job or not self.selected[job.key]:return
-        directory=filedialog.askdirectory(title='选择组合输出目录：TXT1 文件夹 / TXT2.pdf')
+        category=self.feature_tabs.get()=='分类排序'
+        directory=filedialog.askdirectory(title='选择分类排序输出目录' if category else '选择组合输出目录：TXT1 文件夹 / TXT2.pdf')
         if not directory:return
-        folder=Path(directory)/(job.name+'_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
+        folder=Path(directory)/(job.name+('_分类排序_' if category else '_')+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
         job=copy.deepcopy(job);codes=set(self.selected[job.key]);self.busy(True)
         def worker():
             try:
-                excel,paths=export_compositions(job,folder,codes,self.message)
-                self.events.put(('saved',(folder,len(paths),len({p.parent for p in paths}))))
+                if category:
+                    excel,paths=export_categories(job,folder,codes,self.message)
+                    self.events.put(('categories_saved',(folder,len(codes))))
+                else:
+                    excel,paths=export_compositions(job,folder,codes,self.message)
+                    self.events.put(('saved',(folder,len(paths),len({p.parent for p in paths}))))
             except Exception as e:self.events.put(('error',str(e)))
         threading.Thread(target=worker,daemon=True).start()
 
@@ -225,6 +278,8 @@ class App:
                     self.busy(False);self.status.set('；'.join(issues) if issues else '识别完成。先核对排序明细，再勾选需要导出的组合。')
                 elif event=='saved':
                     self.last_folder,n,k=data;self.busy(False);self.status.set(f'已生成排序 Excel、{n} 份单页组合和 {k} 份款号汇总，另有 1 份按 Excel 行顺序排列的全批组合 PDF。');self.open_path(self.last_folder)
+                elif event=='categories_saved':
+                    self.last_folder,n=data;self.busy(False);self.status.set(f'已生成五类独立排序 PDF，每类 {n} 个标签、{(n+5)//6} 页，顺序与 Excel 一致。');self.open_path(self.last_folder)
                 elif event=='excel':self.last_folder=data.parent;self.busy(False);self.status.set('排序 Excel 已保存：'+data.name);self.open_path(data)
         except queue.Empty:pass
         self.root.after(100,self.poll)

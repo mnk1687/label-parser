@@ -39,5 +39,14 @@ def self_test(folder):
     with fitz.open(summary) as doc:
         if len(doc)!=1 or not doc[0].get_drawings():raise RuntimeError('PDF vector test failed')
     export_excel_summary(excel,[(row,source)],folder/'排序汇总'/'Excel顺序组合汇总.pdf')
-    root=ctk.CTk();root.withdraw();App(root);root.update_idletasks();root.destroy()
+    from .categories import category_preview
+    from .composition import Composition
+    from .core import Match
+    import shutil
+    main_source=folder/'FB_MAIN.pdf';shutil.copyfile(source,main_source)
+    item=Composition(row,[Match(str(main_source),1,[0,0,260,220],'text','')],[])
+    with category_preview([item]*6,'MAIN') as doc:
+        if len(doc)!=1 or not doc[0].get_drawings():raise RuntimeError('Six-up vector test failed')
+    root=ctk.CTk();root.withdraw();app=App(root);root.update_idletasks()
+    app.feature_tabs.set('分类排序');app.switch_feature('分类排序');root.update_idletasks();root.destroy()
     (folder/'PASS.txt').write_text('PASS: bundled OCR, Excel round trip, vector PDF merge, Tk/CustomTkinter UI resources.\nOCR: '+recognized,encoding='utf-8')

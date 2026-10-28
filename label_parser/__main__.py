@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 from .workflow import discover,recognize
 from .composition import export_compositions
+from .categories import export_categories
 
 def main():
     parser=argparse.ArgumentParser(description='ProdSheet → 排序 Excel → TXT1 文件夹 / TXT2 组合 PDF')
@@ -9,6 +10,7 @@ def main():
     parser.add_argument('--gui',action='store_true')
     parser.add_argument('--output-dir',type=Path)
     parser.add_argument('--models',help='导出指定 TXT1，多个款号用逗号分隔')
+    parser.add_argument('--mode',choices=['compositions','categories'],default='compositions',help='组合导出或五类各自排序（每页六个）')
     parser.add_argument('--all',action='store_true',help='明确选择全部款号')
     args=parser.parse_args()
     if args.gui or not args.inputs:
@@ -24,6 +26,10 @@ def main():
         recognize(job)
         codes={r.barcode for r in job.batch.details if requested is None or r.txt1 in requested}
         if not codes:print('该批次没有选中款号：',job.name);continue
+        if args.mode=='categories':
+            excel,paths=export_categories(job,args.output_dir/(job.name+'_分类排序_'+job.key[:5]),codes)
+            print(f'已生成 {excel} 和五类排序 PDF，每页六个标签')
+            continue
         excel,paths=export_compositions(job,args.output_dir/(job.name+'_'+job.key[:5]),codes)
         print(f'已生成 {excel} 、{len(paths)} 份组合 PDF 和 {len({p.parent for p in paths})} 份款号汇总 PDF，另含排序汇总/Excel顺序组合汇总.pdf')
     if issues:raise SystemExit(3)

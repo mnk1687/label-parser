@@ -3,7 +3,7 @@
 最终用户不需要 Python、Node、Codex、Microsoft Excel 或独立安装 Tesseract。
 OCR 引擎、英文/数字识别模型、图形界面及 Excel/PDF 依赖都随应用分发。
 
-- Windows 10/11 x64：`LabelDesk-0.5.0-Windows-x64-Setup.exe`，安装到当前用户目录，包含开始菜单和桌面快捷方式；另提供便携 ZIP。
+- Windows 10/11 x64：`LabelDesk-0.6.0-Windows-x64-Setup.exe`，安装到当前用户目录，包含开始菜单和桌面快捷方式；另提供便携 ZIP。
 - Apple 芯片 Mac：DMG 内拖动 LabelDesk 到 Applications。当前本机构建使用的 OCR 库要求 macOS 26+；GitHub Actions 配置在 macOS 14 arm64 构建，须运行成功后才能确认兼容性。
 - 应用目前没有商业代码签名证书/Apple Developer ID 公证，不能承诺首次下载打开没有系统验证提示。
 
