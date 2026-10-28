@@ -1,8 +1,9 @@
 # Build on the target OS. Set LABELDESK_TESSERACT to its OCR installation folder.
-import os,sys,shutil
+import os,re,sys,shutil
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files,copy_metadata
 root=Path(SPECPATH).parent
+version=re.search(r"__version__\s*=\s*'([^']+)'",(root/'label_parser'/'__init__.py').read_text(encoding='utf-8')).group(1)
 ocr=Path(os.environ.get('LABELDESK_TESSERACT') or Path(shutil.which('tesseract') or '').parent)
 executable=ocr/('tesseract.exe' if sys.platform=='win32' else 'tesseract')
 data=Path(os.environ.get('LABELDESK_TESSDATA',str(ocr/'tessdata')))
@@ -23,5 +24,5 @@ exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name='LabelDesk',console=False,
 coll=COLLECT(exe,a.binaries,a.datas,strip=False,upx=False,name='LabelDesk')
 if sys.platform=='darwin':
     app=BUNDLE(coll,name='LabelDesk.app',bundle_identifier='com.labeldesk.desktop',
-        info_plist={'CFBundleDisplayName':'LabelDesk 生产标签','CFBundleShortVersionString':'0.6.0',
+        info_plist={'CFBundleDisplayName':'LabelDesk 生产标签','CFBundleShortVersionString':version,
                     'NSHighResolutionCapable':True,'LSMinimumSystemVersion':os.environ.get('LABELDESK_MIN_MACOS','14.0')})

@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+version="$(python3 -c 'import label_parser; print(label_parser.__version__)')"
+[ -n "$version" ] || { echo 'Cannot read version from label_parser/__init__.py' >&2; exit 1; }
 export LABELDESK_TESSERACT="${LABELDESK_TESSERACT:-$(brew --prefix tesseract)/bin}"
 export LABELDESK_TESSDATA="${LABELDESK_TESSDATA:-$(brew --prefix)/share/tessdata}"
 python3 -m pip install -r requirements-build.txt
@@ -18,5 +20,5 @@ smoke="$(mktemp -d)/smoke"
 "$stage/LabelDesk.app/Contents/MacOS/LabelDesk" --self-test "$smoke"
 test -f "$smoke/PASS.txt"
 ln -s /Applications "$stage/Applications"
-hdiutil create -volname LabelDesk -srcfolder "$stage" -ov -format UDZO dist/LabelDesk-0.6.0-macOS-AppleSilicon.dmg
-hdiutil verify dist/LabelDesk-0.6.0-macOS-AppleSilicon.dmg
+hdiutil create -volname LabelDesk -srcfolder "$stage" -ov -format UDZO "dist/LabelDesk-${version}-macOS-AppleSilicon.dmg"
+hdiutil verify "dist/LabelDesk-${version}-macOS-AppleSilicon.dmg"

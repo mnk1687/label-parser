@@ -113,33 +113,11 @@ python3 -m venv .venv
 
 同一个文件夹只应包含一份 ProdSheet 和本批次标签文件，多批次放在各自子文件夹中。识别缓存依旧可用，源内容和规则变化后自动失效。当前适配此 ProdSheet 表格与青色边框标签，其他版式需进一步适配。
 
-## 构建 Windows 版本
+## 构建与发布
 
-PyInstaller 不能跨平台打包，必须在 Windows 10/11 x64 上执行。前置：Python 3.12 x64、Tesseract-OCR（UB Mannheim 安装包，默认装在 `C:\Program Files\Tesseract-OCR`，且含 `tessdata\eng.traineddata`）。以下命令在仓库根目录的 PowerShell 中运行；`requirements-build.txt` 里的 `-r requirements.txt` 按当前目录解析，所以不要换目录。
+PyInstaller 不能跨平台打包，必须在目标系统上构建。版本号只在 `label_parser/__init__.py` 的 `__version__` 维护；`pyproject.toml`、PyInstaller spec、Inno Setup 脚本和产物文件名都从它读取，升版本只改一处。
 
-```powershell
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install --upgrade pip
-.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+- 本机构建：Windows 运行 `packaging/build_windows.ps1`（需 Python 3.12 x64、Tesseract、Inno Setup 6），Apple 芯片 Mac 运行 `bash packaging/build_mac.sh`（需 Python 3.12、Tesseract）。细节见 `packaging/README.md`。
+- 云端构建：向 `master` 推送相关源码会构建两端安装包并上传 Artifacts；推送 `v*` 标签还会自动创建 GitHub Release 并附上安装包，例如 `git tag v0.6.0 && git push origin v0.6.0`。Release 链接永久有效，支持断点续传。
 
-# 测试会真实调用 OCR，先把 Tesseract 加入 PATH
-$env:PATH += ";C:\Program Files\Tesseract-OCR"
-.venv\Scripts\python.exe -m unittest discover -s tests -v
-
-# 收集依赖许可证（macOS 生成的那份不随仓库分发）
-$env:LABELDESK_TESSERACT = "C:\Program Files\Tesseract-OCR"
-$env:LABELDESK_TESSDATA = "C:\Program Files\Tesseract-OCR\tessdata"
-.venv\Scripts\python.exe packaging\collect_licenses.py
-.venv\Scripts\pyinstaller.exe --noconfirm --clean packaging\LabelDesk.spec
-
-# 冻结包自检：内置 OCR、Excel 往返、矢量 PDF 合并、界面资源
-$test = Join-Path $env:TEMP "LabelDesk-selftest"
-Remove-Item -Recurse -Force $test -ErrorAction SilentlyContinue   # 自检目录必须干净，否则会因文件已存在而失败
-$proc = Start-Process -FilePath ".\dist\LabelDesk\LabelDesk.exe" -ArgumentList "--self-test `"$test`"" -Wait -PassThru
-"ExitCode=$($proc.ExitCode)"
-Get-Content (Join-Path $test "PASS.txt")
-
-Compress-Archive -Path .\dist\LabelDesk -DestinationPath ".\dist\LabelDesk-0.6.0-win64.zip" -Force
-```
-
-产物是免安装目录 `dist\LabelDesk\`（入口 `LabelDesk.exe`）及 `dist\LabelDesk-0.6.0-win64.zip`。首次分发时 Windows SmartScreen 可能提示未知发布者（未签名），选择“更多信息 → 仍要运行”即可。
+Windows 产物为 `LabelDesk-<版本>-Windows-x64-Setup.exe`（安装到当前用户目录，无需管理员）和 `LabelDesk-<版本>-Windows-x64-Portable.zip`；macOS 为 `LabelDesk-<版本>-macOS-AppleSilicon.dmg`。两者都没有商业签名，首次运行会出现 SmartScreen / Gatekeeper 提示。

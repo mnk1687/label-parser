@@ -5,6 +5,8 @@ $env:LABELDESK_TESSDATA = Join-Path $env:LABELDESK_TESSERACT 'tessdata'
 if (-not (Test-Path "$env:LABELDESK_TESSERACT\tesseract.exe")) { throw 'Build machine needs Tesseract. End users do not.' }
 # Tests call pytesseract directly, so the build machine's tesseract.exe must be on PATH.
 $env:PATH = "$env:LABELDESK_TESSERACT;$env:PATH"
+$version = python -c "import label_parser; print(label_parser.__version__)"
+if (-not $version) { throw 'Cannot read version from label_parser/__init__.py' }
 python -m pip install -r requirements-build.txt
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
 python packaging/collect_licenses.py
@@ -22,6 +24,6 @@ $p = Start-Process -FilePath 'dist/LabelDesk/LabelDesk.exe' -ArgumentList @('--s
 if ($p.ExitCode -ne 0 -or -not (Test-Path "$smoke/PASS.txt")) { throw "Frozen smoke test failed. See $smoke" }
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $iscc)) { throw 'Build machine needs Inno Setup 6.' }
-& $iscc packaging/windows.iss
+& $iscc "/DAppVersion=$version" packaging/windows.iss
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
-Compress-Archive -Path dist/LabelDesk -DestinationPath dist/LabelDesk-0.6.0-Windows-x64-Portable.zip -Force
+Compress-Archive -Path dist/LabelDesk -DestinationPath "dist/LabelDesk-${version}-Windows-x64-Portable.zip" -Force
