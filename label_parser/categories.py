@@ -25,8 +25,13 @@ def append_category_page(out,items,kind,documents):
     cell_w=(PAGE_WIDTH-2*MARGIN-GAP)/2
     cell_h=(PAGE_HEIGHT-2*MARGIN-2*GAP)/3
     placements=[]
+    optional=kind.startswith('COMPO')
     for index,item in enumerate(items):
         matches=[m for m in item.matches if role(m.source)==kind]
+        if not matches:
+            # Optional COMPO keeps its grid cell empty so rows stay aligned across category pages.
+            if optional:continue
+            raise ValueError(f'{item.row.txt2} 缺少必需的 {kind} 标签')
         if len(matches)!=1:raise ValueError(f'{item.row.txt2} 的 {kind} 标签不是唯一匹配')
         match=matches[0];clip=fitz.Rect(match.rect)
         if clip.is_empty or clip.width>cell_w or clip.height>cell_h:
@@ -67,7 +72,9 @@ def export_categories(job,folder,barcodes,progress=print):
             for m in item.matches:
                 rect=fitz.Rect(m.rect)
                 if rect.is_empty or rect.width>cell_w or rect.height>cell_h:raise ValueError(f'{item.row.txt2} 尺寸不适合 A4 每页六个')
-        for kind in KINDS:
+        # Only export categories that actually occur; absent COMPO types would produce blank PDFs.
+        kinds=[kind for kind in KINDS if any(any(role(m.source)==kind for m in item.matches) for item in items)]
+        for kind in kinds:
             target=folder/(kind.lower()+'排序PDF.pdf')
             with fitz.open() as out:
                 toc=[]

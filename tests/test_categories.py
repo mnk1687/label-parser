@@ -9,10 +9,10 @@ from label_parser.categories import KINDS,ordered_items,category_preview,export_
 from label_parser.composition import read_excel
 
 class CategoryTest(unittest.TestCase):
-    def fixture(self,root):
+    def fixture(self,root,kinds=KINDS):
         rows=[ProductionRow('CARELABEL_2-',str(size),'FBM015-099-03',f'FBM015-099-03-BLUE-{size}',str(5208133300800+i),1) for i,size in enumerate([40,28,32,30,36,34,38])]
         sources=[];matches=[]
-        for kind in KINDS:
+        for kind in kinds:
             path=root/f'FB_{kind}.pdf';sources.append(str(path))
             with fitz.open() as doc:
                 for n,row in enumerate(rows):
@@ -53,6 +53,21 @@ class CategoryTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):export_categories(job,root/'out',{rows[0].barcode})
             with category_preview(ordered_items(job,rows[:6]),'MAIN') as preview,fitz.open(paths[3]) as exported:
                 self.assertEqual(preview[0].get_pixmap().samples,exported[0].get_pixmap().samples)
+
+    def test_optional_compo_is_skipped_in_category_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);job,rows=self.fixture(root,('MAIN','CARE','COMPO1'))
+            excel,paths=export_categories(job,root/'out',{r.barcode for r in rows},lambda _:None)
+            self.assertEqual([p.name for p in paths],['compo1排序PDF.pdf','main排序PDF.pdf','care排序PDF.pdf'])
+            expected=[r.txt2 for r in read_excel(excel)]
+            for path in paths:
+                with fitz.open(path) as doc:
+                    self.assertEqual([x[1] for x in doc.get_toc()],expected)
+                    words=[w for w in doc[0].get_text('words') if w[4].isdigit() and len(w[4])==13]
+                    self.assertEqual(len(words),6)
+            items=ordered_items(job,rows)
+            with category_preview(items[:6],'COMPO2') as preview:
+                self.assertEqual(len(preview[0].get_drawings()),0)
 
     def test_selection_and_incomplete_match(self):
         with tempfile.TemporaryDirectory() as tmp:

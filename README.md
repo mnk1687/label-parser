@@ -1,4 +1,4 @@
-# LabelDesk v0.6.0 · 生产标签组合
+# LabelDesk v0.7.0 · 生产标签组合
 
 新版流程：**整批 PDF → ProdSheet 排序明细 Excel → TXT1 文件夹 → 以 TXT2 命名的单条 Barcode 组合 PDF**。
 
@@ -6,7 +6,7 @@
 
 关闭旧窗口，双击 `启动解析工具.command`。界面改为浅色、简约布局：左侧导入与批次切换，中间生产明细，右侧整页组合预览和关联来源。
 
-1. 一次导入 ProdSheet、MAIN、CARE、COMPO1、COMPO2、COMPO3，或选择整批文件夹。
+1. 一次导入 ProdSheet、MAIN、CARE，以及可选的 COMPO1、COMPO2、COMPO3，或选择整批文件夹。
 2. 自动读取 ProdSheet 的 Article、Size、TXT1、TXT2、Barcode、Quantity。TXT2 跨页换行会补全。
 3. 明细按 TXT1、颜色、尺码排序。可搜索 TXT1、TXT2、Barcode，或筛选一个 TXT1。
 4. 点击某条明细，右侧直接预览**最终组合页**；切换“关联来源”查看同条 Barcode 的具体源文件及页码。
@@ -17,7 +17,7 @@
 
 在上方切换“组合导出 / 分类排序”，共用已识别批次和勾选明细，无需重新 OCR。
 
-分类排序页签右侧可选择 COMPO1、COMPO2、COMPO3、MAIN、CARE，并翻页查看六个一页的实际排版。未勾选时预览当前筛选结果；勾选后预览全部已勾选明细。点击“导出五类排序 PDF”生成独立目录：
+分类排序页签右侧可选择 COMPO1、COMPO2、COMPO3、MAIN、CARE，并翻页查看六个一页的实际排版。未勾选时预览当前筛选结果；勾选后预览全部已勾选明细。点击“导出分类排序 PDF”生成独立目录，仅为实际存在的标签类型生成 PDF（缺失的 COMPO 不再生成空白文件）：
 
 ```text
 批次名_分类排序_时间戳/
@@ -29,7 +29,7 @@
 └── care排序PDF.pdf
 ```
 
-五个 PDF 分别包含该类型标签，严格跟随本次 Excel 中选中行的顺序。A4 纵向、2 列 × 3 行，先左后右、再从上到下；最后一页不足六个时留空。不会按 Quantity 复制标签。保持完整裁切、原尺寸和原 PDF 对象，原有图片保持原图，预览图不参与导出。尺寸超过单元格或标签缺失/重复时停止，避免缩小、截断或静默跳过。
+每个 PDF 分别包含该类型标签，严格跟随本次 Excel 中选中行的顺序。A4 纵向、2 列 × 3 行，先左后右、再从上到下；最后一页不足六个时留空。不会按 Quantity 复制标签。保持完整裁切、原尺寸和原 PDF 对象，原有图片保持原图，预览图不参与导出。某个明细没有某个 COMPO 时保留空位，以维持各分类页的行对齐；MAIN/CARE 缺失、标签重复或尺寸超过单元格时停止，避免缩小、截断或静默跳过。
 
 本批次实测：每类 390 个标签、65 页，共五份 PDF；包含逐条 TXT2 书签。分类导出不生成五联组合 PDF，原组合页签仍保留原输出流程。
 
@@ -68,7 +68,9 @@ ALT-SS27-016_时间戳/
 | COMPO2 | CARE |
 | COMPO1 | 留空 |
 
-五个位置都对应**同一个 TXT1、同一个 Barcode**。不按相同页码或图片位置猜测。匹配不唯一、缺少任一所需来源文件或 Barcode 标签时，该明细显示“待检查”，不导出不完整组合。全空白的 COMPO 联仍保留原稿。
+五个位置都对应**同一个 TXT1、同一个 Barcode**。不按相同页码或图片位置猜测。
+
+**自适应组合：MAIN、CARE 为必需来源；COMPO1–COMPO3 为可选来源，可以没有，也可以同时有多个。** 只要 MAIN 和 CARE 各有唯一匹配即可开始组合；缺少的标签会被跳过，其余标签按参考版式的阅读顺序（从左到右、从上到下）自动向前补位，不留空位；五类齐全时仍与原固定版式完全一致。源文件中存在但该 Barcode 没有对应 COMPO 标签时也自动跳过。缺少 MAIN 或 CARE、必需标签匹配不唯一，或 COMPO 匹配到多条时，该明细显示“待检查”，不导出不完整组合。全空白的 COMPO 联仍保留原稿。
 
 ## 原生 PDF 内容保留
 
@@ -118,6 +120,6 @@ python3 -m venv .venv
 PyInstaller 不能跨平台打包，必须在目标系统上构建。版本号只在 `label_parser/__init__.py` 的 `__version__` 维护；`pyproject.toml`、PyInstaller spec、Inno Setup 脚本和产物文件名都从它读取，升版本只改一处。
 
 - 本机构建：Windows 运行 `packaging/build_windows.ps1`（需 Python 3.12 x64、Tesseract、Inno Setup 6），Apple 芯片 Mac 运行 `bash packaging/build_mac.sh`（需 Python 3.12、Tesseract）。细节见 `packaging/README.md`。
-- 云端构建：向 `master` 推送相关源码会构建两端安装包并上传 Artifacts；推送 `v*` 标签还会自动创建 GitHub Release 并附上安装包，例如 `git tag v0.6.0 && git push origin v0.6.0`。Release 链接永久有效，支持断点续传。
+- 云端构建：向 `master` 推送相关源码会构建两端安装包并上传 Artifacts；推送 `v*` 标签还会自动创建 GitHub Release 并附上安装包，例如 `git tag v0.7.0 && git push origin v0.7.0`。Release 链接永久有效，支持断点续传。
 
 Windows 产物为 `LabelDesk-<版本>-Windows-x64-Setup.exe`（安装到当前用户目录，无需管理员）和 `LabelDesk-<版本>-Windows-x64-Portable.zip`；macOS 为 `LabelDesk-<版本>-macOS-AppleSilicon.dmg`。两者都没有商业签名，首次运行会出现 SmartScreen / Gatekeeper 提示。

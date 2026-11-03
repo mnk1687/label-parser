@@ -9,6 +9,19 @@ from .prodsheet import ProductionRow
 from .workflow import role
 
 SLOTS={'MAIN':(71.76,106.44),'COMPO2':(71.76,305.64),'COMPO1':(71.76,504.85),'COMPO3':(351.40,105.31),'CARE':(351.40,304.51)}
+# MAIN and CARE always exist; COMPO联 is optional and may appear zero or more times.
+REQUIRED=('MAIN','CARE')
+OPTIONAL=('COMPO1','COMPO2','COMPO3')
+# Reference layout in reading order (left→right, top→bottom); absent labels collapse forward.
+LAYOUT=('MAIN','COMPO3','COMPO2','CARE','COMPO1')
+POSITIONS=[SLOTS[kind] for kind in LAYOUT]
+
+
+def packed_slots(kinds):
+    """Drop absent roles and fill the reference layout in reading order, leaving no gaps."""
+    present=set(kinds)
+    ordered=[kind for kind in LAYOUT if kind in present]
+    return {kind:POSITIONS[index] for index,kind in enumerate(ordered)}
 
 @dataclass
 class Composition:
@@ -29,19 +42,27 @@ def make_compositions(job,rows=None):
         if m.selected:index[(m.model,m.barcode,m.source)].append(m)
     items=[]
     sources=[p for p in job.sources if p in job.files_selected]
+    present={role(p) for p in sources}
+    missing_required=[kind for kind in REQUIRED if kind not in present]
     for row in rows:
         matches=[];missing=[]
         if not sources:missing.append('未选择标签来源文件')
-        missing_roles=set(SLOTS)-{role(p) for p in sources}
-        if missing_roles:missing.append('缺少参考版式所需文件：'+', '.join(sorted(missing_roles)))
+        elif missing_required:missing.append('缺少必需标签文件：'+', '.join(missing_required))
         used=set()
         for path in sources:
-            found=index[(row.txt1,row.barcode,path)]
             kind=role(path)
-            if kind not in SLOTS:missing.append(f'{Path(path).name} 没有对应版面位置');continue
+            if kind not in SLOTS:
+                # Unrelated files do not block MAIN + CARE; malformed COMPO names still cannot be placed.
+                if kind.startswith('COMPO'):missing.append(f'{Path(path).name} 没有对应版面位置')
+                continue
             if kind in used:missing.append(f'{kind} 存在多个来源文件，无法确定唯一版面');continue
             used.add(kind)
-            if len(found)!=1:missing.append(f'{Path(path).name}：匹配 {len(found)} 条，应为 1 条');continue
+            found=index[(row.txt1,row.barcode,path)]
+            if len(found)>1:missing.append(f'{Path(path).name}：匹配 {len(found)} 条，应为 1 条');continue
+            if not found:
+                # MAIN/CARE are mandatory per row; a COMPO with no label for this row is simply absent.
+                if kind not in OPTIONAL:missing.append(f'{Path(path).name}：匹配 0 条，应为 1 条')
+                continue
             matches.extend(found)
         items.append(Composition(row,matches,missing))
     return items
@@ -52,9 +73,10 @@ def compose(item,documents=None):
     out=fitz.open();p=out.new_page(width=612,height=792)
     owned=documents is None;documents={} if owned else documents
     try:
+        slots=packed_slots(role(m.source) for m in item.matches)
         for m in item.matches:
             if m.source not in documents:documents[m.source]=fitz.open(m.source)
-            src=documents[m.source];clip=fitz.Rect(m.rect);x,y=SLOTS[role(m.source)]
+            src=documents[m.source];clip=fitz.Rect(m.rect);x,y=slots[role(m.source)]
             # All original objects remain untouched; only the source viewport and placement change.
             x-=1;y-=(clip.width-2)*.065
             target=fitz.Rect(x,y,x+clip.width,y+clip.height)

@@ -92,7 +92,7 @@ class App:
         for b in [self.import_btn,self.folder_btn]:b.configure(state='disabled' if on else 'normal')
         self.excel_btn.configure(state='normal' if self.current() and not on else 'disabled')
         selected=len(self.selected.get(self.current().key,set())) if self.current() else 0
-        label='导出五类排序 PDF' if self.feature_tabs.get()=='分类排序' else '导出所选组合'
+        label='导出分类排序 PDF' if self.feature_tabs.get()=='分类排序' else '导出所选组合'
         self.export_btn.configure(state='normal' if selected and not on else 'disabled',text=f'{label}（{selected}）' if selected else label)
         self.feature_tabs.configure(state='disabled' if on else 'normal')
         if on:self.progress.configure(mode='indeterminate');self.progress.start()
@@ -135,7 +135,7 @@ class App:
             if model!='全部款号' and r.txt1!=model:continue
             if query and query not in (r.txt1+' '+r.txt2+' '+r.barcode).upper():continue
             self.visible.append(i);tags=('missing',) if item.missing else (('alternate',) if len(self.visible)%2==0 else ())
-            self.table.insert('','end',iid=str(i),values=('☑' if r.barcode in self.selected[job.key] else '☐',r.size,r.txt1,r.txt2,r.barcode,r.quantity,'待检查' if item.missing else f'{len(item.matches)}/{len(job.sources)}'),tags=tags)
+            self.table.insert('','end',iid=str(i),values=('☑' if r.barcode in self.selected[job.key] else '☐',r.size,r.txt1,r.txt2,r.barcode,r.quantity,'待检查' if item.missing else f'{len(item.matches)} 个标签'),tags=tags)
         self.count.set(f'已选 {len(self.selected[job.key])} 条')
         if self.visible:self.table.selection_set(str(self.visible[0]))
         else:self.canvas.delete('all')
@@ -250,7 +250,7 @@ class App:
             try:
                 if category:
                     excel,paths=export_categories(job,folder,codes,self.message)
-                    self.events.put(('categories_saved',(folder,len(codes))))
+                    self.events.put(('categories_saved',(folder,len(codes),len(paths))))
                 else:
                     excel,paths=export_compositions(job,folder,codes,self.message)
                     self.events.put(('saved',(folder,len(paths),len({p.parent for p in paths}))))
@@ -279,7 +279,7 @@ class App:
                 elif event=='saved':
                     self.last_folder,n,k=data;self.busy(False);self.status.set(f'已生成排序 Excel、{n} 份单页组合和 {k} 份款号汇总，另有 1 份按 Excel 行顺序排列的全批组合 PDF。');self.open_path(self.last_folder)
                 elif event=='categories_saved':
-                    self.last_folder,n=data;self.busy(False);self.status.set(f'已生成五类独立排序 PDF，每类 {n} 个标签、{(n+5)//6} 页，顺序与 Excel 一致。');self.open_path(self.last_folder)
+                    self.last_folder,n,k=data;self.busy(False);self.status.set(f'已生成 {k} 类独立排序 PDF，按 {n} 条明细顺序，每页最多 6 个。');self.open_path(self.last_folder)
                 elif event=='excel':self.last_folder=data.parent;self.busy(False);self.status.set('排序 Excel 已保存：'+data.name);self.open_path(data)
         except queue.Empty:pass
         self.root.after(100,self.poll)
