@@ -9,3 +9,8 @@ dist/
 # 由 packaging/collect_licenses.py 在构建机上生成，随平台不同，不入库
 packaging/licenses/
 .build-venv/
+# 本地生产批次与审查报告，不入库
+/ALT-*/
+/review/
+# 本地 Claude Code 配置
+.claude/
