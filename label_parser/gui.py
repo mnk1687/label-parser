@@ -6,7 +6,9 @@ import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
 import customtkinter as ctk
 from PIL import Image,ImageTk
+from . import __version__,updater
 from .workflow import discover,recognize,role,explain
+from .export_verification import verify_excel, save_report, completion_message
 from .categories import KINDS,category_preview,export_categories
 from .composition import sorted_rows,make_compositions,compose,write_excel,export_compositions
 
@@ -17,7 +19,7 @@ ctk.set_appearance_mode('light')
 
 class App:
     def __init__(self,root):
-        self.root=root;self.jobs=[];self.events=queue.Queue();self.working=False
+        self.root=root;self.jobs=[];self.events=queue.Queue();self.working=False;self.updating=False;self.available_update=None
         self.selected={};self.items=[];self.visible=[];self.preview_cache={};self.photo=None;self.last_folder=None;self.category_page=0;self.category_image=None
         root.title('LabelDesk · 生产标签');root.geometry('1450x920');root.minsize(1180,760);root.configure(fg_color=BG)
         root.grid_rowconfigure(0,weight=1);root.grid_columnconfigure(1,weight=1)
@@ -27,12 +29,16 @@ class App:
         ctk.CTkLabel(side,text='生产标签工作台',text_color=MUTED,font=self.font).pack(anchor='w',padx=24,pady=(2,28))
         self.import_btn=self.button(side,'＋  导入整批 PDF',self.choose_files);self.import_btn.pack(fill='x',padx=18)
         self.folder_btn=self.button(side,'选择批次文件夹',self.choose_folder,False);self.folder_btn.pack(fill='x',padx=18,pady=8)
+        self.clear_btn=self.button(side,'清除全部导入数据',self.clear_imports,False);self.clear_btn.pack(fill='x',padx=18,pady=(0,8))
         ctk.CTkLabel(side,text='当前批次',text_color=MUTED,font=self.font).pack(anchor='w',padx=24,pady=(25,5))
         self.batch_choice=ctk.CTkOptionMenu(side,values=['尚未导入'],command=self.change_job,width=170,fg_color='#EEF2FC',button_color='#E3EAFB',text_color=INK);self.batch_choice.pack(padx=18,fill='x')
         ctk.CTkLabel(side,text='输出流程',text_color=MUTED,font=self.font).pack(anchor='w',padx=24,pady=(32,5))
         for label in ['01   整理 ProdSheet 明细','02   核对 Barcode 组合','03   TXT1 文件夹 / TXT2 PDF']:
             ctk.CTkLabel(side,text=label,text_color=INK,font=ctk.CTkFont(size=12),anchor='w').pack(fill='x',padx=24,pady=7)
         ctk.CTkLabel(side,text='源文件保持不变\n原生 PDF 内容直接组合',justify='left',text_color=MUTED,font=ctk.CTkFont(size=11)).pack(side='bottom',anchor='w',padx=24,pady=26)
+        update_bar=ctk.CTkFrame(side,fg_color='transparent');update_bar.pack(side='bottom',fill='x',padx=18,pady=(0,4))
+        self.update_btn=self.button(update_bar,'检查更新',self.check_updates,False);self.update_btn.pack(fill='x')
+        ctk.CTkLabel(update_bar,text=f'当前版本 v{__version__}',text_color=MUTED,font=ctk.CTkFont(size=11),anchor='w').pack(fill='x',pady=(5,0))
         main=ctk.CTkFrame(root,fg_color='transparent');main.grid(row=0,column=1,sticky='nsew',padx=26,pady=24);main.grid_columnconfigure(0,weight=1);main.grid_rowconfigure(4,weight=1)
         head=ctk.CTkFrame(main,fg_color='transparent');head.grid(row=0,column=0,sticky='ew')
         ctk.CTkLabel(head,text='明细与组合',font=ctk.CTkFont(size=27,weight='bold'),text_color=INK).pack(side='left')
@@ -78,7 +84,7 @@ class App:
         ctk.CTkLabel(bottom,textvariable=self.status,text_color=MUTED,font=ctk.CTkFont(size=12),anchor='w',wraplength=850).pack(side='left')
         self.open_btn=self.button(bottom,'打开输出目录',lambda:self.open_path(self.last_folder),False);self.open_btn.pack(side='right')
         self.progress=ctk.CTkProgressBar(main,height=3,progress_color=BLUE);self.progress.grid(row=6,column=0,sticky='ew',pady=(10,0));self.progress.set(0)
-        self.busy(False);root.after(100,self.poll)
+        self.busy(False);root.after(100,self.poll);root.after(4000,lambda:self.check_updates(silent=True))
 
     def button(self,parent,text,command,primary=True):
         return ctk.CTkButton(parent,text=text,command=command,height=38,corner_radius=9,font=self.font,fg_color=BLUE if primary else '#EDF1F8',hover_color='#3659C8' if primary else '#E1E8F3',text_color='white' if primary else INK)
@@ -90,6 +96,9 @@ class App:
     def busy(self,on):
         self.working=on
         for b in [self.import_btn,self.folder_btn]:b.configure(state='disabled' if on else 'normal')
+        self.batch_choice.configure(state='normal' if self.jobs and not on else 'disabled')
+        self.clear_btn.configure(state='normal' if self.jobs and not on else 'disabled')
+        self.open_btn.configure(state='normal' if self.last_folder else 'disabled')
         self.excel_btn.configure(state='normal' if self.current() and not on else 'disabled')
         selected=len(self.selected.get(self.current().key,set())) if self.current() else 0
         label='导出分类排序 PDF' if self.feature_tabs.get()=='分类排序' else '导出所选组合'
@@ -97,6 +106,28 @@ class App:
         self.feature_tabs.configure(state='disabled' if on else 'normal')
         if on:self.progress.configure(mode='indeterminate');self.progress.start()
         else:self.progress.stop();self.progress.configure(mode='determinate');self.progress.set(0)
+
+    def clear_imports(self):
+        if self.working:
+            return
+        self.jobs.clear();self.selected.clear();self.items.clear();self.visible.clear()
+        self.preview_cache.clear();self.photo=None;self.category_image=None
+        self.category_page=0;self.last_folder=None
+        self.batch_choice.configure(values=['尚未导入']);self.batch_choice.set('尚未导入')
+        self.search.delete(0,'end')
+        self.model_filter.configure(values=['全部款号']);self.model_filter.set('全部款号')
+        self.table.delete(*self.table.get_children());self.canvas.delete('all')
+        self.trace.configure(state='normal');self.trace.delete('1.0','end');self.trace.configure(state='disabled')
+        self.feature_tabs.set('组合导出');self.view_mode.set('组合预览')
+        self.category_controls.grid_remove();self.view_mode.grid();self.switch_view('组合预览')
+        self.kind_choice.set(next(iter(KINDS)))
+        self.page_label.configure(text='0 / 0')
+        self.prev_page.configure(state='disabled');self.next_page.configure(state='disabled')
+        self.count.set('已选 0 条');self.preview_title.set('组合预览')
+        self.path_text.set('TXT1 文件夹 / TXT2.pdf')
+        self.summary.set('导入生产单与标签文件，自动整理为可核对的生产明细。')
+        self.status.set('已清除全部导入数据，可重新导入批次。源文件和已导出文件保留。')
+        self.busy(False)
 
     def choose_files(self):
         paths=filedialog.askopenfilenames(title='选择 ProdSheet 和本批次全部标签 PDF',filetypes=[('PDF','*.pdf')])
@@ -124,6 +155,8 @@ class App:
         self.items=make_compositions(job);self.selected.setdefault(job.key,set());self.preview_cache={}
         models=sorted(job.batch.models);self.model_filter.configure(values=['全部款号']+models);self.model_filter.set('全部款号')
         self.summary.set(f'{job.name}   /   {len(models)} 个 TXT1   ·   {len(self.items)} 条生产明细   ·   {len(job.sources)} 份标签文件')
+        if getattr(job.batch, 'verification', []):
+            self.summary.set(self.summary.get()+'   ·   ProdSheet 已完成 OCR 复核')
         self.render_rows();self.busy(False)
 
     def render_rows(self):
@@ -234,7 +267,12 @@ class App:
         if not path:return
         self.busy(True)
         def worker():
-            try:write_excel(job.batch.details,job.batch.source,path);self.events.put(('excel',Path(path)))
+            try:
+                write_excel(job.batch.details,job.batch.source,path)
+                _,report=verify_excel(job.batch,path)
+                report['status']='passed';report['scope']='仅导出 Excel'
+                save_report(report,Path(path).with_name(Path(path).stem+'_核对报告'))
+                self.events.put(('excel',(Path(path),report)))
             except Exception as e:self.events.put(('error',str(e)))
         threading.Thread(target=worker,daemon=True).start()
 
@@ -263,6 +301,47 @@ class App:
         elif sys.platform=='win32':os.startfile(str(path))
         else:subprocess.run(['xdg-open',str(path)],check=False)
 
+    def check_updates(self,silent=False):
+        if self.working or self.updating:return
+        self.updating=True;self.update_btn.configure(state='disabled',text='正在检查更新…',command=self.check_updates)
+        if not silent:self.status.set('正在向 GitHub 检查新版本…')
+        def worker():
+            try:self.events.put(('update_checked',(updater.fetch_latest(),silent,None)))
+            except updater.UpdateError as e:self.events.put(('update_checked',(None,silent,str(e))))
+            except Exception as e:self.events.put(('update_checked',(None,silent,f'检查更新失败：{e}')))
+        threading.Thread(target=worker,daemon=True).start()
+
+    def prompt_update(self,release):
+        notes=(release.notes or '').strip()[:1200] or '该版本没有提供更新说明。'
+        if messagebox.askyesno('发现新版本',f'当前版本：v{__version__}\n最新版本：v{release.version}\n\n{notes}\n\n现在下载并安装吗？'):
+            self.start_update(release)
+
+    def start_update(self,release):
+        self.update_btn.configure(state='disabled',text='正在下载…')
+        self.progress.configure(mode='determinate');self.progress.set(0)
+        self.status.set(f'正在下载 v{release.version}…')
+        def worker():
+            try:path=updater.download(release,progress=lambda value:self.events.put(('update_progress',value)))
+            except updater.UpdateError as e:self.events.put(('update_failed',str(e)))
+            except Exception as e:self.events.put(('update_failed',f'下载安装包失败：{e}'))
+            else:self.events.put(('update_ready',path))
+        threading.Thread(target=worker,daemon=True).start()
+
+    def install_update(self,path):
+        if not messagebox.askyesno('下载完成',f'安装包已下载到：\n{path}\n\n现在退出应用并安装吗？'):
+            self.status.set(f'安装包已保存到 {path}，可稍后手动运行。');return
+        try:updater.install(path)
+        except updater.UpdateError as e:
+            messagebox.showerror('无法自动安装',f'{e}\n\n可以手动打开安装包完成升级：\n{path}')
+            self.open_path(path.parent);return
+        if sys.platform=='darwin':
+            bundle=Path(sys.executable).resolve().parents[2]
+            messagebox.showinfo('升级完成','新版本已安装，LabelDesk 将重新启动。')
+            self.root.destroy();subprocess.Popen(['open','-n',str(bundle)])
+        else:
+            self.status.set('安装程序已启动，LabelDesk 即将退出……')
+            self.root.after(800,self.root.destroy)
+
     def poll(self):
         try:
             while True:
@@ -277,10 +356,33 @@ class App:
                         names=[f'{j.name} · {j.key[:4]}' for j in self.jobs];self.batch_choice.configure(values=names);self.batch_choice.set(names[0]);self.change_job()
                     self.busy(False);self.status.set('；'.join(issues) if issues else '识别完成。先核对排序明细，再勾选需要导出的组合。')
                 elif event=='saved':
-                    self.last_folder,n,k=data;self.busy(False);self.status.set(f'已生成排序 Excel、{n} 份单页组合和 {k} 份款号汇总，另有 1 份按 Excel 行顺序排列的全批组合 PDF。');self.open_path(self.last_folder)
+                    self.last_folder,n,k=data;self.busy(False);self.status.set(completion_message(self.last_folder));self.open_path(self.last_folder)
                 elif event=='categories_saved':
-                    self.last_folder,n,k=data;self.busy(False);self.status.set(f'已生成 {k} 类独立排序 PDF，按 {n} 条明细顺序，每页最多 6 个。');self.open_path(self.last_folder)
-                elif event=='excel':self.last_folder=data.parent;self.busy(False);self.status.set('排序 Excel 已保存：'+data.name);self.open_path(data)
+                    self.last_folder,n,k=data;self.busy(False);self.status.set(completion_message(self.last_folder));self.open_path(self.last_folder)
+                elif event=='update_checked':
+                    release,silent,error=data;self.updating=False;self.update_btn.configure(state='normal',text='检查更新')
+                    if error:
+                        if silent:self.status.set('暂时无法检查更新，可稍后手动重试。')
+                        else:messagebox.showerror('无法检查更新',error)
+                    elif updater.is_newer(release.version):
+                        self.available_update=release;self.update_btn.configure(text=f'新版本 {release.version}',command=lambda:self.prompt_update(release))
+                        self.status.set(f'发现新版本 v{release.version}，点击左下角“新版本”即可下载安装。')
+                        if not silent:self.prompt_update(release)
+                    else:
+                        self.status.set(f'已是最新版本 v{__version__}。')
+                        if not silent:messagebox.showinfo('已是最新版本',f'当前版本 v{__version__} 已是最新。')
+                elif event=='update_progress':
+                    self.progress.set(data);self.status.set(f'正在下载更新… {int(data*100)}%')
+                elif event=='update_failed':
+                    self.progress.set(0);self.update_btn.configure(state='normal',text='检查更新',command=self.check_updates)
+                    self.status.set('更新下载失败');messagebox.showerror('下载失败',data)
+                elif event=='update_ready':
+                    self.progress.set(1);self.update_btn.configure(state='normal',text='安装更新',command=lambda:self.install_update(data))
+                    self.status.set(f'更新已下载：{data}');self.install_update(data)
+                elif event=='excel':
+                    path,report=data;self.last_folder=path.parent;self.busy(False)
+                    self.status.set(f'排序 Excel 核对通过：{report["excel_items"]} 条条码 / Quantity 合计 {report["excel_quantity"]}，与 {report["baseline"]} 一致。')
+                    self.open_path(path)
         except queue.Empty:pass
         self.root.after(100,self.poll)
 
