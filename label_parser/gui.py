@@ -11,6 +11,7 @@ from .workflow import discover,recognize,role,explain
 from .export_verification import verify_excel, save_report, completion_message
 from .categories import KINDS,category_preview,export_categories
 from .composition import sorted_rows,make_compositions,compose,write_excel,export_compositions
+from .review import confirmation_text, review_summary
 
 FONT_FAMILY='Microsoft YaHei UI' if sys.platform=='win32' else 'PingFang SC'
 
@@ -157,6 +158,8 @@ class App:
         self.summary.set(f'{job.name}   /   {len(models)} 个 TXT1   ·   {len(self.items)} 条生产明细   ·   {len(job.sources)} 份标签文件')
         if getattr(job.batch, 'verification', []):
             self.summary.set(self.summary.get()+'   ·   ProdSheet 已完成 OCR 复核')
+        notice=review_summary(job.batch)
+        if notice:self.summary.set(self.summary.get()+'   ·   '+notice)
         self.render_rows();self.busy(False)
 
     def render_rows(self):
@@ -260,11 +263,20 @@ class App:
         im=im.copy();im.thumbnail((max(50,self.canvas.winfo_width()-20),max(50,self.canvas.winfo_height()-20)))
         self.photo=ImageTk.PhotoImage(im);self.canvas.create_image(self.canvas.winfo_width()/2,self.canvas.winfo_height()/2,image=self.photo)
 
+    def confirm_review(self,batch,action):
+        items=list(getattr(batch,'review_items',[]))
+        if not items or getattr(batch,'review_acknowledged',False):return True
+        if not messagebox.askyesno('核对结果待确认',confirmation_text(batch,action)):return False
+        batch.review_acknowledged=True
+        return True
+
     def save_excel(self):
         job=self.current()
         if not job:return
         path=filedialog.asksaveasfilename(title='保存排序明细',initialfile=job.name+'_排序明细.xlsx',defaultextension='.xlsx',filetypes=[('Excel','*.xlsx')])
         if not path:return
+        job=copy.deepcopy(job)
+        if not self.confirm_review(job.batch,'导出排序 Excel'):return
         self.busy(True)
         def worker():
             try:
@@ -283,7 +295,9 @@ class App:
         directory=filedialog.askdirectory(title='选择分类排序输出目录' if category else '选择组合输出目录：TXT1 文件夹 / TXT2.pdf')
         if not directory:return
         folder=Path(directory)/(job.name+('_分类排序_' if category else '_')+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
-        job=copy.deepcopy(job);codes=set(self.selected[job.key]);self.busy(True)
+        job=copy.deepcopy(job)
+        if not self.confirm_review(job.batch,'导出'):return
+        codes=set(self.selected[job.key]);self.busy(True)
         def worker():
             try:
                 if category:
@@ -354,7 +368,11 @@ class App:
                     self.jobs=list(known.values())
                     if self.jobs:
                         names=[f'{j.name} · {j.key[:4]}' for j in self.jobs];self.batch_choice.configure(values=names);self.batch_choice.set(names[0]);self.change_job()
-                    self.busy(False);self.status.set('；'.join(issues) if issues else '识别完成。先核对排序明细，再勾选需要导出的组合。')
+                    self.busy(False)
+                    notice=review_summary(self.current().batch) if self.current() else ''
+                    if issues:self.status.set('；'.join(issues))
+                    elif notice:self.status.set(f'识别完成，{notice}。请先核对差异，再导出。')
+                    else:self.status.set('识别完成。先核对排序明细，再勾选需要导出的组合。')
                 elif event=='saved':
                     self.last_folder,n,k=data;self.busy(False);self.status.set(completion_message(self.last_folder));self.open_path(self.last_folder)
                 elif event=='categories_saved':
@@ -381,7 +399,11 @@ class App:
                     self.status.set(f'更新已下载：{data}');self.install_update(data)
                 elif event=='excel':
                     path,report=data;self.last_folder=path.parent;self.busy(False)
-                    self.status.set(f'排序 Excel 核对通过：{report["excel_items"]} 条条码 / Quantity 合计 {report["excel_quantity"]}，与 {report["baseline"]} 一致。')
+                    if report.get('footer_matched') is False:
+                        self.status.set(f'排序 Excel 已按确认的差异导出：{report["excel_items"]} 条 / Quantity {report["excel_quantity"]}；'
+                                        f'ProdSheet 页脚为 {report["source_items"]} 条 / {report["source_quantity"]}。')
+                    else:
+                        self.status.set(f'排序 Excel 核对通过：{report["excel_items"]} 条条码 / Quantity 合计 {report["excel_quantity"]}，与 {report["baseline"]} 一致。')
                     self.open_path(path)
         except queue.Empty:pass
         self.root.after(100,self.poll)

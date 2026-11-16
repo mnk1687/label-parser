@@ -1,4 +1,4 @@
-# LabelDesk v0.8.0 · 生产标签组合
+# LabelDesk v0.9.0 · 生产标签组合
 
 新版流程：**整批 PDF → ProdSheet 排序明细 Excel → TXT1 文件夹 → 以 TXT2 命名的单条 Barcode 组合 PDF**。
 
@@ -19,12 +19,14 @@
 
 - 条码和数量逐项比较，保留行顺序；不是把所有数字拼接后比较。
 - 仅对已知款号、Article 编号内的 `O/0`、`I/L/1` 字形差异做有限比对，记录为 `matched-code-glyphs`；不修改原数据，不把此规则用于颜色、尺码、条码或数量。
-- 核对完整明细数、页脚 Items、Quantity 合计、页脚 Total Order、EAN-13 校验位、重复条码、TXT2 续行和尺码。
-- OCR 不可用、结果冲突、总数不符或续行归属不明会阻止该批次导入；组合和分类导出也检查校验错误。
-- 文字层缺失或不含 TXT1 表头时使用整页 OCR，再以分列 OCR 复核。扫描件仍可能误读；无法通过校验时应核对原单，优先取得原生 PDF。
-- `ProductionBatch.verification` 保留 PDF/OCR 对比证据；`validation_errors` 保留拦截原因。底层 `read_prodsheet(..., verify_ocr=False)` 供单元测试和仅文字层诊断使用；应用的 `discover()` 默认开启完整复核。
+- **PDF 文字层是第一证据，OCR 是第二证据，用户确认是最终证据。** 差异不会静默覆盖 PDF，也不会直接打断导入：批次照常加载，差异汇总为“待确认”项。
+- 导出前只做一次汇总确认：列出差异条数、高风险项和前 10 条明细；用户确认后按 PDF 文字层/当前解析值继续导出，并把全部差异写入 `生成核对报告.json/.txt`。
+- 核对完整明细数、页脚 Items、Quantity 合计、页脚 Total Order、TXT2 续行和尺码；这些差异默认进入待确认列表。
+- 仍会硬阻断的只有内部矛盾且没有可选值的情况：同一批次出现重复条码，或 PDF 条码的 EAN-13 校验位不正确；以及导出后回读核对失败。
+- 文字层缺失或不含 TXT1 表头时使用整页 OCR；该页所有字段标记为 OCR 来源，并在摘要与报告中提示。整页 OCR 仍可能误读，操作员确认前应核对原单，优先取得原生 PDF。
+- `ProductionBatch.verification` 保留 PDF/OCR 对比证据（OCR 页标记为 `整页OCR/OCR`，不冒充 PDF 文字层）；`validation_errors` 只保留硬阻断原因；`review_items` 保存待确认差异；`ocr_pages` 记录退化为整页 OCR 的页号。底层 `read_prodsheet(..., verify_ocr=False)` 供单元测试和仅文字层诊断使用；应用的 `discover()` 默认开启完整复核。
 
-生成后执行第三重核对：重新读取落盘 Excel，与 ProdSheet 保存的页脚 `Items` / `Total Order` 比较，并逐条检查条码与 Quantity，防止总数相同但有重复/遗漏。重新打开单条、汇总及分类 PDF，核对页数、顺序和渲染内容。成功后在输出目录写入 `生成核对报告.txt` 和 `.json`，并显示原单条数/总数量、本次导出条数/数量。部分勾选明确列出未勾选条数和数量；不会将 Quantity 当作 PDF 页数，也不会因每种分类各有一份 PDF 而重复累加生产数量。只有核对通过才显示完成；失败保留失败报告供检查。单独导出 Excel 时也会回读核对并保存同名核对报告。
+生成后执行第三重核对：重新读取落盘 Excel，与 ProdSheet 保存的页脚 `Items` / `Total Order` 比较，并逐条检查条码与 Quantity，防止总数相同但有重复/遗漏。重新打开单条、汇总及分类 PDF，核对页数、顺序和渲染内容。成功后在输出目录写入 `生成核对报告.txt` 和 `.json`，并显示原单条数/总数量、本次导出条数/数量。部分勾选明确列出未勾选条数和数量；不会将 Quantity 当作 PDF 页数，也不会因每种分类各有一份 PDF 而重复累加生产数量。生成后核对通过，或差异已由操作员确认后，才显示完成；失败保留失败报告供检查。单独导出 Excel 时也会回读核对并保存同名核对报告。
 
 左侧“清除全部导入数据”清空全部批次、勾选、筛选、预览和输出目录引用，保留磁盘源文件及导出结果。处理任务时禁用清除和批次切换。
 
@@ -154,6 +156,6 @@ python3 -m venv .venv
 PyInstaller 不能跨平台打包，必须在目标系统上构建。版本号只在 `label_parser/__init__.py` 的 `__version__` 维护；`pyproject.toml`、PyInstaller spec、Inno Setup 脚本和产物文件名都从它读取，升版本只改一处。
 
 - 本机构建：Windows 运行 `packaging/build_windows.ps1`（需 Python 3.12 x64、Tesseract、Inno Setup 6），Apple 芯片 Mac 运行 `bash packaging/build_mac.sh`（需 Python 3.12、Tesseract）。细节见 `packaging/README.md`。
-- 云端构建：向 `master` 推送相关源码会构建两端安装包并上传 Artifacts；推送 `v*` 标签还会自动创建 GitHub Release 并附上安装包，例如 `git tag v0.8.0 && git push origin v0.8.0`。Release 链接永久有效，支持断点续传。应用内升级只认正式 Release，因此不要把手动创建的 Release 标为 Draft 或 Pre-release。
+- 云端构建：向 `master` 推送相关源码会构建两端安装包并上传 Artifacts；推送 `v*` 标签还会自动创建 GitHub Release 并附上安装包，例如 `git tag v0.9.0 && git push origin v0.9.0`。Release 链接永久有效，支持断点续传。应用内升级只认正式 Release，因此不要把手动创建的 Release 标为 Draft 或 Pre-release。
 
 Windows 产物为 `LabelDesk-<版本>-Windows-x64-Setup.exe`（安装到当前用户目录，无需管理员）和 `LabelDesk-<版本>-Windows-x64-Portable.zip`；macOS 为 `LabelDesk-<版本>-macOS-AppleSilicon.dmg`。两者都没有商业签名，首次运行会出现 SmartScreen / Gatekeeper 提示。

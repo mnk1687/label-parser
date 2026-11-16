@@ -13,14 +13,19 @@ def identity(row):
 
 def verify_excel(batch, path, barcodes=None):
     from .composition import read_excel
-    from .production_verification import require_verified
-    require_verified(batch)
+    from .review import require_exportable
+    require_exportable(batch, acknowledged=getattr(batch, 'review_acknowledged', False))
     rows = read_excel(path)
     original = batch.details
     if Counter(map(identity, rows)) != Counter(map(identity, original)):
         raise ValueError('生成后核对失败：Excel 明细与 ProdSheet 不一致，存在遗漏、重复或字段变化。')
     totals = getattr(batch, 'source_totals', {})
-    if totals and (len(rows) != totals['items'] or sum(r.quantity for r in rows) != totals['quantity']):
+    acknowledged = bool(getattr(batch, 'review_acknowledged', False))
+    footer_matched = (not totals or
+                      (len(rows) == totals['items'] and sum(r.quantity for r in rows) == totals['quantity']))
+    # An explicitly acknowledged short/extra row count is a review decision, not a
+    # silent omission; the generated Excel still has to match batch.details exactly.
+    if totals and not footer_matched and not acknowledged:
         raise ValueError('生成后核对失败：Excel 条码条数或 Quantity 合计与 ProdSheet 页脚不一致。')
     all_codes = {r.barcode for r in original}
     if len(all_codes) != len(original):
@@ -29,17 +34,27 @@ def verify_excel(batch, path, barcodes=None):
     if not chosen or chosen-all_codes:
         raise ValueError('生成后核对失败：所选条码为空或含 ProdSheet 中不存在的条码。')
     selected = [r for r in rows if r.barcode in chosen]
+    if chosen != all_codes:
+        scope = '部分勾选导出'
+    elif totals and not footer_matched:
+        scope = '全量导出（明细少于页脚）' if len(rows) < totals['items'] else '全量导出（明细多于页脚）'
+    else:
+        scope = '全量导出'
     report = {
         'status': 'pending', 'source': batch.source,
         'baseline': 'ProdSheet页脚' if totals else '已解析明细（未提供页脚）',
         'source_items': totals.get('items', len(original)),
         'source_quantity': totals.get('quantity', sum(r.quantity for r in original)),
         'excel_items': len(rows), 'excel_quantity': sum(r.quantity for r in rows),
-        'scope': '全量导出' if chosen == all_codes else '部分勾选导出',
+        'scope': scope,
         'export_items': len(selected), 'export_quantity': sum(r.quantity for r in selected),
         'unselected_items': len(original)-len(selected),
         'unselected_quantity': sum(r.quantity for r in original)-sum(r.quantity for r in selected),
         'barcodes': [r.barcode for r in selected], 'pdf_checks': [],
+        'footer_matched': footer_matched,
+        'ocr_pages': list(getattr(batch, 'ocr_pages', [])),
+        'review_acknowledged': acknowledged,
+        'review_items': [item.as_dict() for item in getattr(batch, 'review_items', [])],
     }
     return selected, report
 
@@ -65,6 +80,17 @@ def save_report(report, stem):
              f"未勾选：{report['unselected_items']} 条，Quantity 合计 {report['unselected_quantity']}"]
     for entry in report['pdf_checks']:
         lines.append(f"PDF：{entry['file']} · {entry['pages']} 页 · 内容核对通过")
+    if report.get('footer_matched') is False:
+        lines.append('页脚核对：未匹配（条数/数量差异已列入待确认项，操作员确认后继续导出）')
+    if report.get('ocr_pages'):
+        lines.append('OCR 页：第 ' + '、'.join(str(p) for p in report['ocr_pages']) + ' 页（无原生文字层）')
+    review = report.get('review_items') or []
+    if review:
+        lines.append(f"核对差异：{len(review)} 项（导出前已确认按 PDF/当前解析值继续）")
+        for item in review[:12]:
+            lines.append('· ' + item['message'])
+        if len(review) > 12:
+            lines.append(f'· ……另有 {len(review)-12} 项，详见 JSON 报告。')
     if report.get('error'): lines.append(report['error'])
     lines.append('Quantity 为生产数量，不等于 PDF 页数；分类 PDF 每页最多放置 6 条明细。')
     Path(str(stem)+'.txt').write_text('\n'.join(lines)+'\n',encoding='utf-8')
@@ -135,5 +161,6 @@ def completion_message(folder):
     report = json.loads((Path(folder)/'生成核对报告.json').read_text(encoding='utf-8'))
     if report['status'] != 'passed':
         raise ValueError('生成后核对未通过')
-    return (f"三重核对通过 · ProdSheet {report['source_items']} 条 / 总数量 {report['source_quantity']}；"
+    prefix = '已按确认的差异导出' if report.get('review_items') else '三重核对通过'
+    return (f"{prefix} · ProdSheet {report['source_items']} 条 / 总数量 {report['source_quantity']}；"
             f"{report['scope']} {report['export_items']} 条 / 数量 {report['export_quantity']}。")

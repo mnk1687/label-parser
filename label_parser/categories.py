@@ -58,8 +58,8 @@ def category_preview(items,kind):
 
 
 def export_categories(job,folder,barcodes,progress=print):
-    from .production_verification import require_verified
-    require_verified(job.batch)
+    from .review import require_exportable
+    require_exportable(job.batch, acknowledged=getattr(job.batch,'review_acknowledged',False))
     folder=Path(folder)
     if folder.exists() and any(folder.iterdir()):raise FileExistsError('输出文件夹不是空目录，请选择新的目录')
     folder.mkdir(parents=True,exist_ok=True)

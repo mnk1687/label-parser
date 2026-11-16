@@ -8,6 +8,7 @@ import fitz
 from label_parser.categories import export_categories, ordered_items
 from label_parser.composition import read_excel, write_excel
 from label_parser.export_verification import verify_excel, verify_export
+from label_parser.review import ReviewItem, ReviewRequired
 import test_categories
 
 
@@ -46,6 +47,23 @@ class ExportVerificationTest(unittest.TestCase):
             job.batch.source_totals['quantity'] = 8
             with self.assertRaisesRegex(ValueError, '页脚不一致'):
                 verify_excel(job.batch, excel)
+
+    def test_acknowledged_footer_mismatch_exports_with_recorded_difference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); job, rows = self.fixture(root)
+            job.batch.review_items = [ReviewItem('missing_rows', 'high', '少 1 条')]
+            job.batch.source_totals = {'items': 8, 'quantity': 7}
+            excel = write_excel(rows, job.batch.source, root/'rows.xlsx')
+            with self.assertRaises(ReviewRequired):
+                verify_excel(job.batch, excel)
+            job.batch.review_acknowledged = True
+            selected, report = verify_excel(job.batch, excel)
+            self.assertEqual(len(selected), len(rows))
+            self.assertFalse(report['footer_matched'])
+            self.assertTrue(report['review_acknowledged'])
+            self.assertEqual(report['source_items'], 8)
+            self.assertEqual(report['excel_items'], len(rows))
+            self.assertEqual(report['review_items'][0]['kind'], 'missing_rows')
 
     def test_unknown_selected_barcode_is_not_silently_dropped(self):
         with tempfile.TemporaryDirectory() as tmp:

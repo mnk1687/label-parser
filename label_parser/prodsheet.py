@@ -6,7 +6,10 @@ import fitz
 import pytesseract
 from PIL import Image
 from .core import open_source
-from .production_verification import verify_columns, validate_batch
+from .production_verification import (
+    collect_review_items, review_from_checks, validate_batch, verify_columns,
+)
+from .review import ReviewItem
 
 @dataclass
 class ProductionRow:
@@ -34,13 +37,16 @@ class ProductionBatch:
     validation_errors: list[str] = field(default_factory=list)
     verification: list[dict] = field(default_factory=list)
     source_totals: dict = field(default_factory=dict)
+    ocr_pages: list[int] = field(default_factory=list)
+    review_items: list[ReviewItem] = field(default_factory=list)
+    review_acknowledged: bool = False
 
 
 def read_prodsheet(source: str, progress=print, *, verify_ocr=False) -> ProductionBatch:
     path=Path(source).expanduser().resolve()
     models=[];mapping={};conflicts=set();warnings=[];rows=0;evidence={};details=[]
     pending_row = None
-    page_texts = []; verification = []; verification_errors = []
+    page_texts = []; verification = []; inline_review = []; ocr_pages = []
     with open_source(path) as doc:
         for index,page in enumerate(doc):
             progress(f'读取 ProdSheet · {index+1}/{len(doc)} 页')
@@ -49,21 +55,38 @@ def read_prodsheet(source: str, progress=print, *, verify_ocr=False) -> Producti
             page_texts.append(page.get_text())
             if not words or not any(w[4].upper() == 'TXT1' for w in words):
                 native_text = False
-                pix=page.get_pixmap(dpi=216, colorspace=fitz.csRGB, alpha=False)
-                im=Image.frombytes('RGB',(pix.width,pix.height),pix.samples)
-                data=pytesseract.image_to_data(im,config='--psm 6',output_type=pytesseract.Output.DICT,timeout=90)
-                words=[(data['left'][i]/3,data['top'][i]/3,(data['left'][i]+data['width'][i])/3,(data['top'][i]+data['height'][i])/3,t) for i,t in enumerate(data['text']) if t.strip()]
-                warnings.append(f'ProdSheet 第 {index+1} 页文字层缺失或表头不完整，使用 OCR，请核对提取款号。')
-                page_texts[-1] = ' '.join(w[4] for w in words)
+                ocr_pages.append(index+1)
+                try:
+                    pix=page.get_pixmap(dpi=216, colorspace=fitz.csRGB, alpha=False)
+                    im=Image.frombytes('RGB',(pix.width,pix.height),pix.samples)
+                    data=pytesseract.image_to_data(im,config='--psm 6',output_type=pytesseract.Output.DICT,timeout=90)
+                    words=[(data['left'][i]/3,data['top'][i]/3,(data['left'][i]+data['width'][i])/3,(data['top'][i]+data['height'][i])/3,t) for i,t in enumerate(data['text']) if t.strip()]
+                    warnings.append(f'ProdSheet 第 {index+1} 页文字层缺失或表头不完整，使用 OCR，请核对提取款号。')
+                    page_texts[-1] = ' '.join(w[4] for w in words)
+                except (RuntimeError, pytesseract.TesseractNotFoundError) as exc:
+                    message=f'第 {index+1} 页 OCR 失败，整页明细未提取：{exc}'
+                    warnings.append('ProdSheet '+message)
+                    inline_review.append(ReviewItem('unreadable','high',message,page=index+1))
+                    pending_row = None
+                    continue
             heads=[w for w in words if w[4].upper()=='TXT1']
             if len(heads)!=1:
-                raise ValueError(f'ProdSheet 第 {index+1} 页无法确定 TXT1 列，停止批量解析，避免遗漏款号。')
+                message=f'第 {index+1} 页无法确定 TXT1 列，整页明细未提取。'
+                warnings.append('ProdSheet '+message)
+                inline_review.append(ReviewItem('unreadable','high',message,page=index+1))
+                pending_row = None
+                continue
             h=heads[0]
             headers=sorted([w for w in words if abs(w[1]-h[1])<max(4,h[3]-h[1])],key=lambda w:w[0])
             # Embedded font maps the 'ti' ligature to a Bengali glyph in real sheets.
             headers=[(*w[:4], w[4].replace('ঞ', 'ti')) for w in headers]
             right=next((w[0] for w in headers if w[0]>h[2]),None)
-            if right is None:raise ValueError(f'第 {index+1} 页 TXT1 列右边界不明确')
+            if right is None:
+                message=f'第 {index+1} 页 TXT1 列右边界不明确，整页明细未提取。'
+                warnings.append('ProdSheet '+message)
+                inline_review.append(ReviewItem('unreadable','high',message,page=index+1))
+                pending_row = None
+                continue
             if native_text:
                 # PDF word grouping can join adjacent TXT2 and Barcode cells.
                 # Split at real character coordinates, not guessed string lengths.
@@ -119,9 +142,13 @@ def read_prodsheet(source: str, progress=print, *, verify_ocr=False) -> Producti
             if verify_ocr:
                 missing_headers = {'SIZE', 'TXT1', 'TXT2', 'BARCODE', 'QUANTITY'} - {v[4].upper() for v in headers}
                 if missing_headers:
-                    verification_errors.append(f'第 {index+1} 页缺少可复核表头：{sorted(missing_headers)}')
-                checks, errors = verify_columns(page, words, headers, footer, index+1, progress)
-                verification.extend(checks); verification_errors.extend(errors)
+                    inline_review.append(ReviewItem(
+                        'missing_header', 'medium',
+                        f'第 {index+1} 页缺少可复核表头：{sorted(missing_headers)}', page=index+1))
+                checks, _ = verify_columns(
+                    page, words, headers, footer, index+1, progress,
+                    source_label='PDF' if native_text else '整页OCR')
+                verification.extend(checks); inline_review.extend(review_from_checks(checks))
             first_top = model_words[0][0][1]-2 if model_words else footer
             leading = [v for v in words if h[3] <= v[1] < first_top]
             tail = cell(*txt2_bounds, h[3], first_top) if txt2_bounds else ''
@@ -137,7 +164,11 @@ def read_prodsheet(source: str, progress=print, *, verify_ocr=False) -> Producti
             if not model_words:
                 if joined:
                     continue
-                raise ValueError(f'第 {index+1} 页 TXT1 列未提取到款号')
+                message=f'第 {index+1} 页 TXT1 列未提取到款号，整页明细未提取。'
+                warnings.append('ProdSheet '+message)
+                inline_review.append(ReviewItem('unreadable','high',message,page=index+1))
+                pending_row = None
+                continue
             pending_row = None
             for pos,(w,value) in enumerate(model_words):
                 pending_row = None
@@ -160,7 +191,13 @@ def read_prodsheet(source: str, progress=print, *, verify_ocr=False) -> Producti
                 article=cell(*article_bounds,w[1]-2,bottom)
                 qty_bounds=(headers[-1][0],page.rect.width)
                 qty=cell(*qty_bounds,w[1]-2,bottom)
-                if not qty.isdigit():raise ValueError(f'第 {index+1} 页第 {pos+1} 条 Quantity 无法读取：{qty}')
+                if not qty.isdigit():
+                    inline_review.append(ReviewItem(
+                        'unreadable', 'high',
+                        f'第 {index+1} 页第 {pos+1} 条 Quantity 无法读取：{qty}',
+                        page=index+1, row=pos+1, field='QUANTITY'))
+                    pending_row = None
+                    continue
                 details.append(ProductionRow(article,get_col('SIZE'),value,get_col('TXT2'),code,int(qty),index+1,pos+1))
                 pending_row = details[-1]
                 evidence.setdefault(code,[]).append({'page':index+1,'row':pos+1,'model':value})
@@ -169,7 +206,12 @@ def read_prodsheet(source: str, progress=print, *, verify_ocr=False) -> Producti
             if barcode_head is None:warnings.append(f'第 {index+1} 页缺少 Barcode 列，仅支持款号直接匹配。')
     for code in conflicts:
         mapping.pop(code,None);evidence.pop(code,None);warnings.append(f'条码 {code} 对应多个款号，已禁用该关联。')
+    if not details:
+        raise ValueError('ProdSheet 未提取到任何明细，请确认文件包含 TXT1 表头与款号。')
     batch = ProductionBatch(str(path),models,mapping,rows,warnings,evidence,details)
+    batch.ocr_pages = ocr_pages
     batch.verification = verification
-    batch.validation_errors = verification_errors + validate_batch(batch, page_texts, require_totals=verify_ocr)
+    batch.validation_errors = validate_batch(batch, page_texts)
+    batch.review_items = collect_review_items(
+        batch, page_texts, require_totals=verify_ocr, extra=inline_review)
     return batch

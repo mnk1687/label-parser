@@ -74,6 +74,7 @@ class ProductionPaginationTest(unittest.TestCase):
         self.assertEqual(batch.details[0].quantity, 119)
         self.assertTrue(any('表头不完整' in w for w in batch.warnings))
         self.assertFalse(batch.validation_errors)
+        self.assertTrue(any(i.kind == 'ocr_page' for i in batch.review_items))
 
     def test_footer_baseline_jitter_does_not_duplicate_quantity(self):
         batch = self.parse([[(80, self.row(txt2='FBM015-096-02-MD BLUE-32'))]])

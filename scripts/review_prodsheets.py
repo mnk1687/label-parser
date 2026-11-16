@@ -33,6 +33,8 @@ def main():
         try:
             batch = read_prodsheet(str(path), progress=lambda _: None, verify_ocr=True)
             entry['batch'] = asdict(batch)
+            entry['review_count'] = len(batch.review_items)
+            entry['review_high'] = sum(1 for item in batch.review_items if item.severity == 'high')
             require_verified(batch)
             with fitz.open(path) as doc:
                 entry['pages'] = len(doc)
@@ -49,7 +51,7 @@ def main():
                     {'barcode': item.row.barcode, 'txt2': item.row.txt2, 'missing': item.missing}
                     for item in items if item.missing]
                 entry['label_warnings'] = job.result.warnings
-            entry['status'] = 'passed'
+            entry['status'] = 'review' if batch.review_items else 'passed'
         except Exception as exc:
             entry['status'] = 'blocked'; entry['error'] = str(exc)
         entry['sources_unchanged'] = all(hashlib.sha256(Path(p).read_bytes()).hexdigest() == value
@@ -62,7 +64,8 @@ def main():
                                          ensure_ascii=False, indent=2),encoding='utf-8')
     if not report:
         raise SystemExit('No ProdSheet PDFs found one directory below --root')
-    if any(e['status'] != 'passed' or not e['sources_unchanged'] for e in report):
+    if any(e['status'] != 'passed' or not e['sources_unchanged'] or e.get('review_count')
+           for e in report):
         raise SystemExit(1)
 
 
