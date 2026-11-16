@@ -56,7 +56,7 @@ def saved_page_digest(document):
 
 def save_report(report, stem):
     stem = Path(stem)
-    Path(str(stem)+'.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
+    Path(str(stem)+'.json').write_text(json.dumps(report, ensure_ascii=False, indent=2),encoding='utf-8')
     lines = [f"生成后核对：{'通过' if report['status']=='passed' else '失败'}",
              f"基准来源：{report['baseline']} · {report['source']}",
              f"ProdSheet：{report['source_items']} 条条码，Quantity 合计 {report['source_quantity']}",
@@ -67,7 +67,7 @@ def save_report(report, stem):
         lines.append(f"PDF：{entry['file']} · {entry['pages']} 页 · 内容核对通过")
     if report.get('error'): lines.append(report['error'])
     lines.append('Quantity 为生产数量，不等于 PDF 页数；分类 PDF 每页最多放置 6 条明细。')
-    Path(str(stem)+'.txt').write_text('\n'.join(lines)+'\n')
+    Path(str(stem)+'.txt').write_text('\n'.join(lines)+'\n',encoding='utf-8')
 
 
 def verify_export(job, excel, barcodes, items, paths, mode, progress=print, summaries=None):
@@ -126,13 +126,13 @@ def verify_export(job, excel, barcodes, items, paths, mode, progress=print, summ
     except Exception as exc:
         report['status'] = 'failed'; report['error'] = str(exc)
         if 'baseline' in report: save_report(report, stem)
-        else: Path(str(stem)+'.txt').write_text('生成后核对失败：'+str(exc)+'\n请勿将此次输出用于生产。\n')
+        else: Path(str(stem)+'.txt').write_text('生成后核对失败：'+str(exc)+'\n请勿将此次输出用于生产。\n',encoding='utf-8')
         raise
     return report
 
 
 def completion_message(folder):
-    report = json.loads((Path(folder)/'生成核对报告.json').read_text())
+    report = json.loads((Path(folder)/'生成核对报告.json').read_text(encoding='utf-8'))
     if report['status'] != 'passed':
         raise ValueError('生成后核对未通过')
     return (f"三重核对通过 · ProdSheet {report['source_items']} 条 / 总数量 {report['source_quantity']}；"

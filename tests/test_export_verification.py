@@ -22,7 +22,7 @@ class ExportVerificationTest(unittest.TestCase):
             root = Path(tmp); job, rows = self.fixture(root)
             for name, chosen in [('all', {r.barcode for r in rows}), ('partial', {rows[0].barcode})]:
                 export_categories(job, root/name, chosen, lambda _: None)
-                report = json.loads((root/name/'生成核对报告.json').read_text())
+                report = json.loads((root/name/'生成核对报告.json').read_text(encoding='utf-8'))
                 self.assertEqual(report['status'], 'passed')
                 self.assertEqual(report['source_items'], 7)
                 self.assertEqual(report['source_quantity'], 7)
@@ -67,5 +67,5 @@ class ExportVerificationTest(unittest.TestCase):
             items = ordered_items(job, read_excel(excel))
             with self.assertRaisesRegex(ValueError, '遗漏、重复或内容变化'):
                 verify_export(job, excel, codes, items, paths, 'categories', lambda _: None)
-            report = json.loads((root/'out'/'生成核对报告.json').read_text())
+            report = json.loads((root/'out'/'生成核对报告.json').read_text(encoding='utf-8'))
             self.assertEqual(report['status'], 'failed')
