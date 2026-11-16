@@ -3,7 +3,7 @@
 Only the official release page is queried over HTTPS; the download uses the
 standard library so frozen builds need no extra dependency or signing key.
 """
-import json,os,re,subprocess,sys,tempfile,urllib.error,urllib.request
+import hashlib,json,os,re,subprocess,sys,tempfile,urllib.error,urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from . import __version__
@@ -25,6 +25,7 @@ class Release:
     asset_url:str
     asset_size:int
     page_url:str
+    asset_digest:str=''
 
 
 def version_key(text):
@@ -59,7 +60,9 @@ def parse_release(payload,platform_name=None):
     asset=select_asset(payload.get('assets') or [],platform_name)
     name=str(asset.get('name') or '');url=str(asset.get('browser_download_url') or '')
     if not name or not url:raise UpdateError('这个版本的安装包信息不完整，请到 Release 页面手动下载。')
-    return Release(version.lstrip('vV'),str(payload.get('body') or '').strip(),name,url,int(asset.get('size') or 0),str(payload.get('html_url') or ''))
+    return Release(version.lstrip('vV'),str(payload.get('body') or '').strip(),name,url,
+                   int(asset.get('size') or 0),str(payload.get('html_url') or ''),
+                   str(asset.get('digest') or ''))
 
 
 def _open(url):
@@ -89,11 +92,17 @@ def download_folder():
     return downloads if downloads.is_dir() else Path(tempfile.gettempdir())
 
 
+def expected_sha256(digest):
+    """Accept GitHub's 'sha256:<hex>' asset digest; ignore anything else."""
+    algorithm,_,value=str(digest or '').strip().lower().partition(':')
+    return value if algorithm=='sha256' and len(value)==64 else ''
+
+
 def download(release,folder=None,progress=None,opener=None):
     folder=Path(folder or download_folder());folder.mkdir(parents=True,exist_ok=True)
     opener=opener or _open
     destination=folder/release.asset_name;partial=folder/(release.asset_name+'.part')
-    total=release.asset_size;done=0
+    total=release.asset_size;done=0;hasher=hashlib.sha256()
     try:
         with opener(release.asset_url) as response:
             header=getattr(response,'headers',None) or {}
@@ -102,9 +111,12 @@ def download(release,folder=None,progress=None,opener=None):
                 while True:
                     chunk=response.read(1<<16)
                     if not chunk:break
-                    handle.write(chunk);done+=len(chunk)
+                    handle.write(chunk);hasher.update(chunk);done+=len(chunk)
                     if progress and total:progress(min(done/total,0.999))
         if total and done!=total:raise UpdateError(f'下载不完整（{done}/{total} 字节），请重试。')
+        expected=expected_sha256(release.asset_digest)
+        if expected and hasher.hexdigest()!=expected:
+            raise UpdateError('安装包校验失败（SHA-256 不匹配），已删除下载文件，请重试。')
     except UpdateError:
         partial.unlink(missing_ok=True);raise
     except (OSError,urllib.error.URLError) as e:

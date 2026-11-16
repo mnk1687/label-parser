@@ -20,7 +20,7 @@ ctk.set_appearance_mode('light')
 
 class App:
     def __init__(self,root):
-        self.root=root;self.jobs=[];self.events=queue.Queue();self.working=False;self.updating=False;self.available_update=None
+        self.root=root;self.jobs=[];self.events=queue.Queue();self.working=False;self.updating=False;self.available_update=None;self.prompted_version=None
         self.selected={};self.items=[];self.visible=[];self.preview_cache={};self.photo=None;self.last_folder=None;self.category_page=0;self.category_image=None
         root.title('LabelDesk · 生产标签');root.geometry('1450x920');root.minsize(1180,760);root.configure(fg_color=BG)
         root.grid_rowconfigure(0,weight=1);root.grid_columnconfigure(1,weight=1)
@@ -385,7 +385,9 @@ class App:
                     elif updater.is_newer(release.version):
                         self.available_update=release;self.update_btn.configure(text=f'新版本 {release.version}',command=lambda:self.prompt_update(release))
                         self.status.set(f'发现新版本 v{release.version}，点击左下角“新版本”即可下载安装。')
-                        if not silent:self.prompt_update(release)
+                        if not silent or self.prompted_version!=release.version:
+                            self.prompted_version=release.version
+                            self.prompt_update(release)
                     else:
                         self.status.set(f'已是最新版本 v{__version__}。')
                         if not silent:messagebox.showinfo('已是最新版本',f'当前版本 v{__version__} 已是最新。')

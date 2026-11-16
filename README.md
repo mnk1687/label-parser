@@ -1,4 +1,4 @@
-# LabelDesk v0.9.0 · 生产标签组合
+# LabelDesk v0.9.1 · 生产标签组合
 
 新版流程：**整批 PDF → ProdSheet 排序明细 Excel → TXT1 文件夹 → 以 TXT2 命名的单条 Barcode 组合 PDF**。
 
@@ -142,9 +142,9 @@ python3 -m venv .venv
 
 ## 应用内升级
 
-左侧栏底部显示当前版本和“检查更新”。启动 4 秒后会自动静默检查一次 GitHub 最新 Release；发现新版本时按钮变为“新版本 x.y.z”，点击可查看更新说明并下载安装，也可随时手动点击检查。不联网或 GitHub 不可达时只提示一次，不影响本地解析和导出。
+左侧栏底部显示当前版本和“检查更新”。启动 4 秒后会自动检查一次 GitHub 最新 Release；发现新版本会弹窗提示一次（同一版本同一会话不重复弹），按钮同时变为“新版本 x.y.z”，之后也可随时手动检查。下载在后台线程进行，界面不会卡住；下载完成后先校验 GitHub 提供的 SHA-256，再询问是否安装。不联网或 GitHub 不可达时只提示一次，不影响本地解析和导出。
 
-- 只读取 `mnk1687/label-parser` 的正式 Release（`/releases/latest`），测试版和草稿不会推送；下载走 Release 的 HTTPS 地址，文件先写成 `.part`，长度校验通过后才改名生效。
+- 只读取 `mnk1687/label-parser` 的正式 Release（`/releases/latest`），测试版和草稿不会推送；下载走 Release 的 HTTPS 地址（GitHub 的 release-assets CDN），文件先写成 `.part`，长度和 SHA-256 校验通过后才改名生效。中国大陆网络下载 GitHub 资产可能较慢，但不影响界面使用；如需镜像加速，需要另行配置对象存储/CDN。
 - Windows 下载 `-Setup.exe` 后启动安装程序并退出应用，安装程序原地覆盖升级并保留用户数据。
 - macOS 下载 `.dmg`，挂载后把 `LabelDesk.app` 复制回原安装位置，然后重新启动。若应用从只读 dmg 直接运行或没有写入权限，会提示手动拖入“应用程序”。
 - 安装包保存在 `~/Downloads`（没有该目录时用系统临时目录），失败可手动运行。
@@ -156,6 +156,6 @@ python3 -m venv .venv
 PyInstaller 不能跨平台打包，必须在目标系统上构建。版本号只在 `label_parser/__init__.py` 的 `__version__` 维护；`pyproject.toml`、PyInstaller spec、Inno Setup 脚本和产物文件名都从它读取，升版本只改一处。
 
 - 本机构建：Windows 运行 `packaging/build_windows.ps1`（需 Python 3.12 x64、Tesseract、Inno Setup 6），Apple 芯片 Mac 运行 `bash packaging/build_mac.sh`（需 Python 3.12、Tesseract）。细节见 `packaging/README.md`。
-- 云端构建：向 `master` 推送相关源码会构建两端安装包并上传 Artifacts；推送 `v*` 标签还会自动创建 GitHub Release 并附上安装包，例如 `git tag v0.9.0 && git push origin v0.9.0`。Release 链接永久有效，支持断点续传。应用内升级只认正式 Release，因此不要把手动创建的 Release 标为 Draft 或 Pre-release。
+- 云端构建：向 `master` 推送相关源码会构建两端安装包并上传 Artifacts；推送 `v*` 标签还会自动创建 GitHub Release 并附上安装包，例如 `git tag v0.9.1 && git push origin v0.9.1`。Release 链接永久有效，支持断点续传。应用内升级只认正式 Release，因此不要把手动创建的 Release 标为 Draft 或 Pre-release。
 
 Windows 产物为 `LabelDesk-<版本>-Windows-x64-Setup.exe`（安装到当前用户目录，无需管理员）和 `LabelDesk-<版本>-Windows-x64-Portable.zip`；macOS 为 `LabelDesk-<版本>-macOS-AppleSilicon.dmg`。两者都没有商业签名，首次运行会出现 SmartScreen / Gatekeeper 提示。

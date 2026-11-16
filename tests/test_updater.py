@@ -1,4 +1,4 @@
-import io,json,tempfile,unittest
+import hashlib,io,json,tempfile,unittest
 from pathlib import Path
 from label_parser import updater
 
@@ -57,6 +57,24 @@ class UpdaterTest(unittest.TestCase):
             self.assertEqual(path.read_bytes(),b'x'*200)
             self.assertEqual(seen[-1],1.0)
             self.assertFalse(Path(str(path)+'.part').exists())
+
+    def test_download_verifies_sha256_digest(self):
+        data=b'x'*200
+        asset=dict(ASSETS[0],digest='sha256:'+hashlib.sha256(data).hexdigest())
+        release=updater.parse_release(dict(PAYLOAD,assets=[asset]),'win32')
+        with tempfile.TemporaryDirectory() as tmp:
+            path=updater.download(release,tmp,opener=lambda url:Response(data,{'Content-Length':'200'}))
+            self.assertEqual(path.read_bytes(),data)
+            self.assertEqual(release.asset_digest,'sha256:'+hashlib.sha256(data).hexdigest())
+
+    def test_download_rejects_sha256_mismatch(self):
+        data=b'x'*200
+        asset=dict(ASSETS[0],digest='sha256:'+'0'*64)
+        release=updater.parse_release(dict(PAYLOAD,assets=[asset]),'win32')
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(updater.UpdateError,'SHA-256'):
+                updater.download(release,tmp,opener=lambda url:Response(data,{'Content-Length':'200'}))
+            self.assertEqual(list(Path(tmp).iterdir()),[])
 
     def test_download_rejects_truncated_file(self):
         release=updater.parse_release(PAYLOAD,'win32')
