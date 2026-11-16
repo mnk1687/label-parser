@@ -18,7 +18,7 @@ class WorkflowTest(unittest.TestCase):
     def test_discovery_isolation_selection_and_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);self.setup_batch(root,'batch-a');self.setup_batch(root,'batch-b')
-            jobs,issues=discover([str(root)],lambda _:None)
+            jobs,issues=discover([str(root)],lambda _:None,verify_ocr=False)
             self.assertFalse(issues);self.assertEqual(len(jobs),2)
             self.assertFalse(build_plan(jobs))
             for job in jobs:
@@ -43,7 +43,7 @@ class WorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             parent=self.setup_batch(Path(tmp),'batch')
             (parent/'ProdSheet_second.pdf').write_bytes((parent/'ProdSheet_123.pdf').read_bytes())
-            jobs,issues=discover([str(parent)],lambda _:None)
+            jobs,issues=discover([str(parent)],lambda _:None,verify_ocr=False)
             self.assertFalse(jobs);self.assertEqual(len(issues),1)
 
     def test_cache_reuse_and_content_invalidation(self):

@@ -13,7 +13,7 @@ class CompositionTest(unittest.TestCase):
             f.sheet(root/'ProdSheet.pdf');f.label(root/'FB_MAIN.pdf',test_batch.A,'5208133300829');f.label(root/'FB_CARE.pdf','','5208133300829')
             
             for kind in ['COMPO1','COMPO2','COMPO3']:f.label(root/f'FB_{kind}.pdf','','5208133300829')
-            jobs,issues=discover([str(root)],lambda _:None);self.assertFalse(issues)
+            jobs,issues=discover([str(root)],lambda _:None,verify_ocr=False);self.assertFalse(issues)
             job=jobs[0];recognize(job,lambda _:None)
             rows=[ProductionRow('CARELABEL_2-','26',test_batch.A,test_batch.A+'-BLACK-26','5208133300829',54)]
             item=make_compositions(job,rows)[0];self.assertFalse(item.missing);self.assertEqual(len(item.matches),5)
@@ -31,7 +31,7 @@ class CompositionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);f=test_batch.BatchTest();f.sheet(root/'ProdSheet.pdf')
             f.label(root/'FB_MAIN.pdf',test_batch.A,'5208133300829');f.label(root/'FB_CARE.pdf','','5208133300829')
-            jobs,issues=discover([str(root)],lambda _:None);self.assertFalse(issues)
+            jobs,issues=discover([str(root)],lambda _:None,verify_ocr=False);self.assertFalse(issues)
             job=jobs[0];recognize(job,lambda _:None)
             item=make_compositions(job,[row])[0]
             self.assertFalse(item.missing);self.assertEqual(sorted(role(m.source) for m in item.matches),['CARE','MAIN'])
@@ -42,7 +42,7 @@ class CompositionTest(unittest.TestCase):
             f.label(root/'FB_COMPO1.pdf','','5208133300829');f.label(root/'FB_COMPO3.pdf','','5208133300829')
             # COMPO2 exists as a source file but has no label for this Barcode; it must not block composition.
             f.label(root/'FB_COMPO2.pdf','','5208133300999')
-            jobs,issues=discover([str(root)],lambda _:None);self.assertFalse(issues)
+            jobs,issues=discover([str(root)],lambda _:None,verify_ocr=False);self.assertFalse(issues)
             job=jobs[0];recognize(job,lambda _:None)
             item=make_compositions(job,[row])[0]
             self.assertFalse(item.missing)
@@ -50,7 +50,7 @@ class CompositionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);f=test_batch.BatchTest();f.sheet(root/'ProdSheet.pdf')
             f.label(root/'FB_MAIN.pdf',test_batch.A,'5208133300829')
-            jobs,issues=discover([str(root)],lambda _:None);self.assertFalse(issues)
+            jobs,issues=discover([str(root)],lambda _:None,verify_ocr=False);self.assertFalse(issues)
             job=jobs[0];recognize(job,lambda _:None)
             item=make_compositions(job,[row])[0]
             self.assertTrue(any('CARE' in reason for reason in item.missing))
@@ -63,7 +63,7 @@ class CompositionTest(unittest.TestCase):
             f.label(root/'FB_CL_COMPO1_MERCURY_75x30.pdf','','5208133300829')
             # The order preview is not a label layout source and must not block the combination.
             f.label(root/'OrderPreview_2591066-CARELABEL_1.pdf','','')
-            jobs,issues=discover([str(root)],lambda _:None);self.assertFalse(issues)
+            jobs,issues=discover([str(root)],lambda _:None,verify_ocr=False);self.assertFalse(issues)
             job=jobs[0];recognize(job,lambda _:None)
             item=make_compositions(job,[row])[0]
             self.assertFalse(item.missing)

@@ -5,6 +5,7 @@ from collections import defaultdict
 import re,hashlib
 from .prodsheet import read_prodsheet,ProductionBatch
 from .core import ScanResult,scan_batch,export
+from .production_verification import require_verified
 
 @dataclass
 class Job:
@@ -32,7 +33,7 @@ def role(path):
     return match.group(1) if match else '其他标签'
 
 
-def discover(inputs,progress=print):
+def discover(inputs,progress=print, *, verify_ocr=True):
     paths=[]
     for item in inputs:
         p=Path(item).expanduser().resolve()
@@ -45,7 +46,9 @@ def discover(inputs,progress=print):
         sheets=[p for p in files if role(p)=='ProdSheet']
         if len(sheets)!=1:
             issues.append(f'{parent}：发现 {len(sheets)} 份 ProdSheet，无法唯一归组。请将每批文件放到各自文件夹。');continue
-        try:batch=read_prodsheet(str(sheets[0]),progress)
+        try:
+            batch=read_prodsheet(str(sheets[0]),progress,verify_ocr=verify_ocr)
+            require_verified(batch)
         except Exception as e:issues.append(f'{sheets[0].name}：{e}');continue
         sources=[str(p) for p in files if p not in sheets]
         sources.sort(key=lambda s:({'MAIN':0,'CARE':1}.get(role(s),2),Path(s).name))

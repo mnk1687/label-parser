@@ -7,9 +7,9 @@ from label_parser.core import scan_batch,export
 
 A='FBL015-166-03';B='FBL015-164-03'
 class BatchTest(unittest.TestCase):
-    def sheet(self,path):
+    def sheet(self,path,pages=1):
         with fitz.open() as d:
-            for i in range(2):
+            for i in range(pages):
                 p=d.new_page(width=600,height=500)
                 for x,t in [(30,'Size'),(100,'TXT1'),(240,'TXT2'),(400,'Barcode'),(510,'Quantity')]:p.insert_text((x,50),t,fontsize=9)
                 for row,(model,code) in enumerate([(A,'5208133300829'),(B,'5208133300836')]):
@@ -26,7 +26,7 @@ class BatchTest(unittest.TestCase):
             d.save(path)
     def test_txt1_only_dedup_and_barcode_batch(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);sheet=root/'sheet.pdf';self.sheet(sheet)
+            root=Path(tmp);sheet=root/'sheet.pdf';self.sheet(sheet,pages=2)
             batch=read_prodsheet(str(sheet),lambda _:None)
             self.assertEqual(batch.models,[A,B]);self.assertEqual(batch.rows,4)
             self.assertEqual(batch.barcode_models,{'5208133300829':A,'5208133300836':B})

@@ -205,13 +205,15 @@ def export_excel_summary(excel, entries, output):
 
 
 def export_compositions(job,folder,barcodes,progress=print):
+    from .production_verification import require_verified
+    require_verified(job.batch)
     folder=Path(folder)
     if folder.exists() and any(folder.iterdir()):raise FileExistsError('输出文件夹不是空目录，请选择新的目录')
     folder.mkdir(parents=True,exist_ok=True)
     # The sorted workbook is the authoritative intermediate for folders/names.
     excel=write_excel(job.batch.details,job.batch.source,folder/'ProdSheet_排序明细.xlsx')
-    records=read_excel(excel)
-    selected=[r for r in records if r.barcode in barcodes]
+    from .export_verification import verify_excel, verify_export
+    selected, _ = verify_excel(job.batch, excel, barcodes)
     if not selected:raise ValueError('请先勾选需要导出的明细')
     items=make_compositions(job,selected)
     errors=[f'{i.row.txt2}：'+ '；'.join(i.missing) for i in items if i.missing]
@@ -238,4 +240,7 @@ def export_compositions(job,folder,barcodes,progress=print):
     progress(f'正在按 Excel 行顺序汇总 {len(items)} 个组合…')
     export_excel_summary(excel,[(i.row,p) for i,p in zip(items,targets)],ordered_summary)
     progress(f'已生成排序汇总 · {len(items)} 页 · 每行一个组合')
+    summary_checks=[(summaries[model],sorted_rows([r for r,_ in entries])) for model,entries in groups.items()]
+    summary_checks.append((ordered_summary,selected))
+    verify_export(job,excel,barcodes,items,targets,'combined',progress,summary_checks)
     return excel,targets

@@ -58,11 +58,14 @@ def category_preview(items,kind):
 
 
 def export_categories(job,folder,barcodes,progress=print):
+    from .production_verification import require_verified
+    require_verified(job.batch)
     folder=Path(folder)
     if folder.exists() and any(folder.iterdir()):raise FileExistsError('输出文件夹不是空目录，请选择新的目录')
     folder.mkdir(parents=True,exist_ok=True)
     excel=write_excel(job.batch.details,job.batch.source,folder/'ProdSheet_排序明细.xlsx')
-    rows=[r for r in read_excel(excel) if r.barcode in barcodes]
+    from .export_verification import verify_excel, verify_export
+    rows, _ = verify_excel(job.batch, excel, barcodes)
     if not rows:raise ValueError('请先勾选需要导出的明细')
     items=ordered_items(job,rows);docs={};targets=[]
     try:
@@ -88,4 +91,5 @@ def export_categories(job,folder,barcodes,progress=print):
             targets.append(target)
     finally:
         for doc in docs.values():doc.close()
+    verify_export(job,excel,barcodes,items,targets,'categories',progress)
     return excel,targets
